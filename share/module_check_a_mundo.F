@@ -1401,15 +1401,34 @@
 ! aercu_opt = 1 (CESM-aerosal) only works with MSKF, special Morrison
 !-----------------------------------------------------------------------
 
-      oops = 0
-      DO i = 1, model_config_rec % max_dom
-         IF ( .NOT. model_config_rec % grid_allowed(i) ) CYCLE
-         IF ( model_config_rec%aercu_opt .GT. 0 .AND.       &
-              ( model_config_rec%cu_physics(i) .NE. MSKFSCHEME .OR. &
-              model_config_rec%mp_physics(i) .NE. MORR_TM_AERO ) ) THEN
-              oops = oops + 1
+      !oops = 0
+      !DO i = 1, model_config_rec % max_dom
+      !   IF ( .NOT. model_config_rec % grid_allowed(i) ) CYCLE
+      !   IF ( model_config_rec%aercu_opt .GT. 0 .AND.       &
+      !        ( model_config_rec%cu_physics(i) .NE. MSKFSCHEME .OR. &
+      !        model_config_rec%mp_physics(i) .NE. MORR_TM_AERO ) ) THEN
+      !        oops = oops + 1
+      !   END IF
+      !ENDDO
+
+      DO i = 1, model_config_rec%max_dom
+
+         IF (.NOT. model_config_rec%grid_allowed(i)) CYCLE
+
+         ! Morrison aerosol required everywhere
+         IF ( model_config_rec%aercu_opt > 0 .AND. &
+         model_config_rec%mp_physics(i) /= MORR_TM_AERO ) THEN
+           oops = oops + 1
          END IF
-      ENDDO
+
+         ! If a cumulus scheme is used, it must be MSKF
+         IF ( model_config_rec%aercu_opt > 0 .AND. &
+         model_config_rec%cu_physics(i) /= 0 .AND. &
+         model_config_rec%cu_physics(i) /= MSKFSCHEME ) THEN
+           oops = oops + 1
+         END IF
+
+      END DO
 
       IF ( oops .GT. 0 ) THEN
          wrf_err_message = '--- ERROR: aercu_opt requires cu_physics = 11, and mp_physics = 40 '
