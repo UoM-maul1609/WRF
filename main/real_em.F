@@ -711,6 +711,9 @@ character *24 :: temp24 , temp24b
    REAL , DIMENSION(:,:,:) , ALLOCATABLE , SAVE :: ubdy3dtemp2 , vbdy3dtemp2 , tbdy3dtemp2 , pbdy3dtemp2 , qbdy3dtemp2
    REAL , DIMENSION(:,:,:) , ALLOCATABLE , SAVE :: mbdy2dtemp2
    REAL , DIMENSION(:,:,:) , ALLOCATABLE , SAVE :: qn1bdy3dtemp1, qn1bdy3dtemp2, qn2bdy3dtemp1, qn2bdy3dtemp2, qn3bdy3dtemp1, qn3bdy3dtemp2
+        REAL, DIMENSION(:,:,:), ALLOCATABLE, SAVE :: &
+             qnbgbdy3dtemp1, qabgbdy3dtemp1, qmbgbdy3dtemp1, &
+             qnbgbdy3dtemp2, qabgbdy3dtemp2, qmbgbdy3dtemp2
 real::t1,t2
 
    INTEGER                                :: open_status
@@ -818,7 +821,25 @@ real::t1,t2
                ALLOCATE ( qn3bdy3dtemp2(ims:ime,kms:kme,jms:jme) )
             END IF
          END IF
+        IF ( config_flags%mp_physics == MORR_TM_AERO ) THEN
 
+           IF (ALLOCATED(qnbgbdy3dtemp1)) DEALLOCATE(qnbgbdy3dtemp1)
+           IF (ALLOCATED(qabgbdy3dtemp1)) DEALLOCATE(qabgbdy3dtemp1)
+           IF (ALLOCATED(qmbgbdy3dtemp1)) DEALLOCATE(qmbgbdy3dtemp1)
+
+           IF (ALLOCATED(qnbgbdy3dtemp2)) DEALLOCATE(qnbgbdy3dtemp2)
+           IF (ALLOCATED(qabgbdy3dtemp2)) DEALLOCATE(qabgbdy3dtemp2)
+           IF (ALLOCATED(qmbgbdy3dtemp2)) DEALLOCATE(qmbgbdy3dtemp2)
+
+           ALLOCATE(qnbgbdy3dtemp1(ims:ime,kms:kme,jms:jme))
+           ALLOCATE(qabgbdy3dtemp1(ims:ime,kms:kme,jms:jme))
+           ALLOCATE(qmbgbdy3dtemp1(ims:ime,kms:kme,jms:jme))
+
+           ALLOCATE(qnbgbdy3dtemp2(ims:ime,kms:kme,jms:jme))
+           ALLOCATE(qabgbdy3dtemp2(ims:ime,kms:kme,jms:jme))
+           ALLOCATE(qmbgbdy3dtemp2(ims:ime,kms:kme,jms:jme))
+
+        END IF
       END IF
 
       !  Open the wrfinput file.  From this program, this is an *output* file.
@@ -898,7 +919,39 @@ real::t1,t2
                           ids, ide, jds, jde, kds, kde, ims, ime, jms, jme, kms, kme, ips, ipe, jps, jpe, kps, kpe )
             END IF
          END IF
+                IF ( config_flags%mp_physics == MORR_TM_AERO ) THEN
 
+                   CALL couple( grid%mu_2, grid%mub,                 &
+                                qnbgbdy3dtemp1,                      &
+                                grid%scalar(:,:,:,P_QNBGAER),        &
+                                't', grid%msfty,                     &
+                                grid%c1h, grid%c2h,                  &
+                                grid%c1h, grid%c2h,                  &
+                                ids, ide, jds, jde, kds, kde,        &
+                                ims, ime, jms, jme, kms, kme,        &
+                                ips, ipe, jps, jpe, kps, kpe )
+
+                   CALL couple( grid%mu_2, grid%mub,                 &
+                                qabgbdy3dtemp1,                      &
+                                grid%scalar(:,:,:,P_QABGAER),        &
+                                't', grid%msfty,                     &
+                                grid%c1h, grid%c2h,                  &
+                                grid%c1h, grid%c2h,                  &
+                                ids, ide, jds, jde, kds, kde,        &
+                                ims, ime, jms, jme, kms, kme,        &
+                                ips, ipe, jps, jpe, kps, kpe )
+
+                   CALL couple( grid%mu_2, grid%mub,                 &
+                                qmbgbdy3dtemp1,                      &
+                                grid%scalar(:,:,:,P_QMBGAER),        &
+                                't', grid%msfty,                     &
+                                grid%c1h, grid%c2h,                  &
+                                grid%c1h, grid%c2h,                  &
+                                ids, ide, jds, jde, kds, kde,        &
+                                ims, ime, jms, jme, kms, kme,        &
+                                ips, ipe, jps, jpe, kps, kpe )
+
+                END IF
       END IF
 
       IF(grid_fdda .GE. 1)THEN
@@ -987,6 +1040,39 @@ real::t1,t2
                                                                        ips , ipe , jps , jpe , kps , kpe )
             END IF
          END IF
+        IF ( config_flags%mp_physics == MORR_TM_AERO ) THEN
+
+           CALL stuff_bdy( qnbgbdy3dtemp1,                    &
+                grid%scalar_bxs(:,:,:,P_QNBGAER),             &
+                grid%scalar_bxe(:,:,:,P_QNBGAER),             &
+                grid%scalar_bys(:,:,:,P_QNBGAER),             &
+                grid%scalar_bye(:,:,:,P_QNBGAER),             &
+                'T', spec_bdy_width,                           &
+                ids, ide, jds, jde, kds, kde,                 &
+                ims, ime, jms, jme, kms, kme,                 &
+                ips, ipe, jps, jpe, kps, kpe )
+
+           CALL stuff_bdy( qabgbdy3dtemp1,                    &
+                grid%scalar_bxs(:,:,:,P_QABGAER),             &
+                grid%scalar_bxe(:,:,:,P_QABGAER),             &
+                grid%scalar_bys(:,:,:,P_QABGAER),             &
+                grid%scalar_bye(:,:,:,P_QABGAER),             &
+                'T', spec_bdy_width,                           &
+                ids, ide, jds, jde, kds, kde,                 &
+                ims, ime, jms, jme, kms, kme,                 &
+                ips, ipe, jps, jpe, kps, kpe )
+
+           CALL stuff_bdy( qmbgbdy3dtemp1,                    &
+                grid%scalar_bxs(:,:,:,P_QMBGAER),             &
+                grid%scalar_bxe(:,:,:,P_QMBGAER),             &
+                grid%scalar_bys(:,:,:,P_QMBGAER),             &
+                grid%scalar_bye(:,:,:,P_QMBGAER),             &
+                'T', spec_bdy_width,                           &
+                ids, ide, jds, jde, kds, kde,                 &
+                ims, ime, jms, jme, kms, kme,                 &
+                ips, ipe, jps, jpe, kps, kpe )
+
+        END IF
       END IF
 
 
@@ -1084,7 +1170,39 @@ real::t1,t2
                           ids, ide, jds, jde, kds, kde, ims, ime, jms, jme, kms, kme, ips, ipe, jps, jpe, kps, kpe )
             END IF
          END IF
+                IF ( config_flags%mp_physics == MORR_TM_AERO ) THEN
 
+                   CALL couple( grid%mu_2, grid%mub,                 &
+                                qnbgbdy3dtemp2,                      &
+                                grid%scalar(:,:,:,P_QNBGAER),        &
+                                't', grid%msfty,                     &
+                                grid%c1h, grid%c2h,                  &
+                                grid%c1h, grid%c2h,                  &
+                                ids, ide, jds, jde, kds, kde,        &
+                                ims, ime, jms, jme, kms, kme,        &
+                                ips, ipe, jps, jpe, kps, kpe )
+
+                   ! Repeat for QABGAER and QMBGAER.
+                   CALL couple( grid%mu_2, grid%mub,                 &
+                                qabgbdy3dtemp2,                      &
+                                grid%scalar(:,:,:,P_QABGAER),        &
+                                't', grid%msfty,                     &
+                                grid%c1h, grid%c2h,                  &
+                                grid%c1h, grid%c2h,                  &
+                                ids, ide, jds, jde, kds, kde,        &
+                                ims, ime, jms, jme, kms, kme,        &
+                                ips, ipe, jps, jpe, kps, kpe )
+                   CALL couple( grid%mu_2, grid%mub,                 &
+                                qmbgbdy3dtemp2,                      &
+                                grid%scalar(:,:,:,P_QMBGAER),        &
+                                't', grid%msfty,                     &
+                                grid%c1h, grid%c2h,                  &
+                                grid%c1h, grid%c2h,                  &
+                                ids, ide, jds, jde, kds, kde,        &
+                                ims, ime, jms, jme, kms, kme,        &
+                                ips, ipe, jps, jpe, kps, kpe )
+
+                END IF
       END IF
 
       IF(grid_fdda .GE. 1)THEN
@@ -1196,6 +1314,42 @@ real::t1,t2
                                                                   ips , ipe , jps , jpe , kps , kpe )
             END IF
          END IF
+                IF ( config_flags%mp_physics == MORR_TM_AERO ) THEN
+
+                   CALL stuff_bdytend( qnbgbdy3dtemp2, qnbgbdy3dtemp1, &
+                        REAL(interval_seconds),                         &
+                        grid%scalar_btxs(:,:,:,P_QNBGAER),              &
+                        grid%scalar_btxe(:,:,:,P_QNBGAER),              &
+                        grid%scalar_btys(:,:,:,P_QNBGAER),              &
+                        grid%scalar_btye(:,:,:,P_QNBGAER),              &
+                        'T', spec_bdy_width,                            &
+                        ids, ide, jds, jde, kds, kde,                  &
+                        ims, ime, jms, jme, kms, kme,                  &
+                        ips, ipe, jps, jpe, kps, kpe )
+
+                   ! Repeat for QABGAER and QMBGAER.
+                   CALL stuff_bdytend( qabgbdy3dtemp2, qabgbdy3dtemp1, &
+                        REAL(interval_seconds),                         &
+                        grid%scalar_btxs(:,:,:,P_QABGAER),              &
+                        grid%scalar_btxe(:,:,:,P_QABGAER),              &
+                        grid%scalar_btys(:,:,:,P_QABGAER),              &
+                        grid%scalar_btye(:,:,:,P_QABGAER),              &
+                        'T', spec_bdy_width,                            &
+                        ids, ide, jds, jde, kds, kde,                  &
+                        ims, ime, jms, jme, kms, kme,                  &
+                        ips, ipe, jps, jpe, kps, kpe )
+                   CALL stuff_bdytend( qmbgbdy3dtemp2, qmbgbdy3dtemp1, &
+                        REAL(interval_seconds),                         &
+                        grid%scalar_btxs(:,:,:,P_QMBGAER),              &
+                        grid%scalar_btxe(:,:,:,P_QMBGAER),              &
+                        grid%scalar_btys(:,:,:,P_QMBGAER),              &
+                        grid%scalar_btye(:,:,:,P_QMBGAER),              &
+                        'T', spec_bdy_width,                            &
+                        ids, ide, jds, jde, kds, kde,                  &
+                        ims, ime, jms, jme, kms, kme,                  &
+                        ips, ipe, jps, jpe, kps, kpe )
+
+                END IF
       END IF
 
       !  Both pieces of the boundary data are now available to be written (initial time and tendency).
@@ -1316,7 +1470,17 @@ real::t1,t2
                   END DO
                END DO
             END IF
-
+                IF ( config_flags%mp_physics == MORR_TM_AERO ) THEN
+                   DO j = jps, jpe
+                      DO k = kps, kpe
+                         DO i = ips, ipe
+                            qnbgbdy3dtemp1(i,k,j) = qnbgbdy3dtemp2(i,k,j)
+                            qabgbdy3dtemp1(i,k,j) = qabgbdy3dtemp2(i,k,j)
+                            qmbgbdy3dtemp1(i,k,j) = qmbgbdy3dtemp2(i,k,j)
+                         END DO
+                      END DO
+                   END DO
+                END IF
          END IF
 
          IF(grid_fdda .GE. 1)THEN
@@ -1405,6 +1569,39 @@ real::t1,t2
                                                                           ips , ipe , jps , jpe , kps , kpe )
                END IF
             END IF
+                IF ( config_flags%mp_physics == MORR_TM_AERO ) THEN
+
+                   CALL stuff_bdy( qnbgbdy3dtemp1,                     &
+                        grid%scalar_bxs(:,:,:,P_QNBGAER),             &
+                        grid%scalar_bxe(:,:,:,P_QNBGAER),             &
+                        grid%scalar_bys(:,:,:,P_QNBGAER),             &
+                        grid%scalar_bye(:,:,:,P_QNBGAER),             &
+                        'T', spec_bdy_width,                          &
+                        ids, ide, jds, jde, kds, kde,                 &
+                        ims, ime, jms, jme, kms, kme,                 &
+                        ips, ipe, jps, jpe, kps, kpe )
+
+                   CALL stuff_bdy( qabgbdy3dtemp1,                     &
+                        grid%scalar_bxs(:,:,:,P_QABGAER),             &
+                        grid%scalar_bxe(:,:,:,P_QABGAER),             &
+                        grid%scalar_bys(:,:,:,P_QABGAER),             &
+                        grid%scalar_bye(:,:,:,P_QABGAER),             &
+                        'T', spec_bdy_width,                          &
+                        ids, ide, jds, jde, kds, kde,                 &
+                        ims, ime, jms, jme, kms, kme,                 &
+                        ips, ipe, jps, jpe, kps, kpe )
+
+                   CALL stuff_bdy( qmbgbdy3dtemp1,                     &
+                        grid%scalar_bxs(:,:,:,P_QMBGAER),             &
+                        grid%scalar_bxe(:,:,:,P_QMBGAER),             &
+                        grid%scalar_bys(:,:,:,P_QMBGAER),             &
+                        grid%scalar_bye(:,:,:,P_QMBGAER),             &
+                        'T', spec_bdy_width,                          &
+                        ids, ide, jds, jde, kds, kde,                 &
+                        ims, ime, jms, jme, kms, kme,                 &
+                        ips, ipe, jps, jpe, kps, kpe )
+
+                END IF
    
          END IF
 

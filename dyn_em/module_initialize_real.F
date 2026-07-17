@@ -7,7 +7,8 @@
 !-----------------------------------------------------------------------
 
 MODULE module_initialize_real
-
+   use module_cumulus_driver, only : aer_time_int_cu, aer_p_int_cu
+   use MODULE_MP_MORR_TWO_MOMENT_AERO, only : dryrad_aer, dispersion_aer, num_to_mass_aer
    USE module_bc
    USE module_configure
    USE module_domain
@@ -68,6 +69,8 @@ CONTAINS
 !
    )
 
+      USE module_physics_init, ONLY: aerosol_in_cu
+      USE module_cumulus_driver, ONLY: aer_p_int_cu
       USE module_optional_input
       USE module_radiation_driver, ONLY: cal_cldfra3
       USE module_dm, ONLY : wrf_dm_max_real
@@ -93,7 +96,7 @@ CONTAINS
                  ims, ime, jms, jme, kms, kme, &
                  its, ite, jts, jte, kts, kte, &
                  ips, ipe, jps, jpe, kps, kpe, &
-                 i, j, k, kk
+                 i, j, k, kk, l
 
       INTEGER :: imsx, imex, jmsx, jmex, kmsx, kmex,    &
                  ipsx, ipex, jpsx, jpex, kpsx, kpex,    &
@@ -194,6 +197,16 @@ integer::oops1,oops2
       REAL :: press_above, press_below
 
       !  Dimension information stored in grid data structure.
+#if (EM_CORE == 1)
+      REAL, ALLOCATABLE :: aerotcu( :, :, :, :)   
+      REAL, ALLOCATABLE :: aeroptcu( :, :, : )     
+      REAL, ALLOCATABLE :: aerovar( :,:,:)                      
+#endif
+        INTEGER :: i_start,j_start, k_start, k_end
+
+        REAL :: maerosol(10),naer(10)
+        REAL :: mass_total, number_total, area_total, rg, lnsg
+        REAL :: rho_dry
 
       CALL cpu_time(t_start)
       CALL get_ijk_from_grid (  grid ,                   &
@@ -205,6 +218,18 @@ integer::oops1,oops2
                                 imsy, imey, jmsy, jmey, kmsy, kmey,    &
                                 ipsy, ipey, jpsy, jpey, kpsy, kpey )
       its = ips ; ite = ipe ; jts = jps ; jte = jpe ; kts = kps ; kte = kpe
+
+        ALLOCATE( aerotcu(ims:ime,                       &
+                          1:grid%alevsiz_cu,             &
+                          jms:jme,                       &
+                          1:grid%no_src_types_cu) )
+
+        ALLOCATE( aeroptcu(ims:ime,                      &
+                           1:grid%alevsiz_cu,            &
+                           jms:jme) )
+
+
+        ALLOCATE( aerovar(ims:ime, kms:kme, jms:jme) )
 
       CALL model_to_grid_config_rec ( grid%id , model_config_rec , config_flags )
 
@@ -4686,6 +4711,136 @@ endif
 !.. scheme.
 !+---+-----------------------------------------------------------------+
 
+!-----------------------------------------------------------------------
+! Initialise MCB background aerosol from the CESM aerosol climatology.
+! This is intentionally before initial cloud insertion and number repair.
+!-----------------------------------------------------------------------
+   IF ( (config_flags%mp_physics == MORR_TM_AERO) &
+        .and.(config_flags%aercu_opt.GT. 0 ) ) THEN
+        !aerocu=999.9
+      CALL aerosol_in_cu(grid%aeromcu,grid%alevsiz_cu,grid%num_months,grid%no_src_types_cu,grid%XLAT,grid%XLONG,grid%aeropcu,&
+                     ids, ide, jds, jde, kds, kde,                  &
+                     ims, ime, jms, jme, kms, kme,                  &
+                     its, ite, jts, jte, kts, kte)
+
+        call aer_time_int_cu(grid%julday,grid%julian,grid%aeromcu,aerotcu, &
+                grid%alevsiz_cu,grid%num_months,grid%no_src_types_cu,&
+                  ids , ide , jds , jde , kds , kde ,     &
+                  ims , ime , jms , jme , kms , kme ,     &
+                  its , ite , jts , jte , kts , kte )
+
+        ! INTERPOLATE PRESSURE IN TIME
+        call aer_time_int_cu(grid%julday,grid%julian,grid%aeropcu,aeroptcu,grid%alevsiz_cu,grid%num_months,1, &
+                  ids , ide , jds , jde , kds , kde ,     &
+                  ims , ime , jms , jme , kms , kme ,     &
+                  its , ite , jts , jte , kts , kte )
+
+        call aer_p_int_cu(grid%p_hyd ,aeroptcu, grid%alevsiz_cu, aerotcu, aerocu, grid%no_src_types_cu, grid%p_hyd_w, &
+                   ids , ide , jds , jde , kds , kde ,     &
+                   ims , ime , jms , jme , kms , kme ,     &
+                   its , ite , jts , jte , kts , kte )
+
+        i_start = MAX(its, ids)
+        i_end   = MIN(ite, ide-1)
+
+        j_start = MAX(jts, jds)
+        j_end   = MIN(jte, jde-1)
+
+        k_start = MAX(kts, kds)
+        k_end   = MIN(kte, kde-1)
+
+		scalar(:,:,:,P_QMBGAER) = 0.0
+		scalar(:,:,:,P_QNBGAER) = 0.0
+		scalar(:,:,:,P_QABGAER) = 0.0
+        DO j = j_start, j_end
+           DO k = k_start, k_end
+              DO i = i_start, i_end
+        !DO j = jms, jme
+           !DO k = kms, kme
+              !DO i = ims, ime
+
+                 maerosol(:) = 0.0
+
+                 maerosol(1)  = config_flags%aercu_fct       &
+                                  * aerocu(i,k,j,6) * 1.0E-9
+
+                 maerosol(2)  = config_flags%aercu_fct       &
+                                  * aerocu(i,k,j,5) * 1.0E-9
+
+                 maerosol(3)  = config_flags%aercu_fct * 1.44 &
+                                  * aerocu(i,k,j,1) * 1.0E-9
+
+                 maerosol(4)  = config_flags%aercu_fct * 1.44 &
+                                  * aerocu(i,k,j,2) * 1.0E-9
+
+                 maerosol(5)  = config_flags%aercu_fct * 1.44 &
+                                  * aerocu(i,k,j,3) * 1.0E-9
+
+                 maerosol(6)  = config_flags%aercu_fct * 1.44 &
+                                  * aerocu(i,k,j,4) * 1.0E-9
+
+                 maerosol(7)  = config_flags%aercu_fct * 1.54 &
+                                  * aerocu(i,k,j,9) * 1.0E-9
+
+                 maerosol(8)  = config_flags%aercu_fct * 1.37 &
+                                  * aerocu(i,k,j,7) * 1.0E-9
+
+                 maerosol(9)  = config_flags%aercu_fct * 1.25 &
+                                  * aerocu(i,k,j,10) * 1.0E-9
+
+                 maerosol(10) = config_flags%aercu_fct * 1.37 &
+                                  * aerocu(i,k,j,8) * 1.0E-9
+
+                 mass_total = SUM(maerosol)
+
+                 naer(1) = 5.64259E13 * maerosol(1)**0.58
+                 naer(2)  = maerosol(2)  * num_to_mass_aer(2)
+                 naer(3)  = maerosol(3)  * num_to_mass_aer(3)
+                 naer(4)  = maerosol(4)  * num_to_mass_aer(4)
+                 naer(5)  = maerosol(5)  * num_to_mass_aer(5)
+                 naer(6)  = maerosol(6)  * num_to_mass_aer(6)
+                 naer(7)  = maerosol(7)  * num_to_mass_aer(7)
+                 naer(8)  = maerosol(8)  * num_to_mass_aer(8)
+                 naer(9)  = maerosol(9)  * num_to_mass_aer(9)
+                 naer(10) = maerosol(10) * num_to_mass_aer(10)
+                 number_total = SUM(naer)
+
+                 area_total = 0.0
+                 DO l = 1, grid%no_src_types_cu
+                    IF (naer(l) > 0.0 .AND.                          &
+                        dryrad_aer(l) > 0.0 .AND.                      &
+                        dispersion_aer(l) >= 1.0) THEN
+
+                        rg   = dryrad_aer(l)
+                        lnsg = LOG(dispersion_aer(l))
+
+                        area_total = area_total                   &
+                          + 4.0 * PI * naer(l) * rg**2           &
+                          * EXP(2.0 * lnsg**2)
+                    END IF
+                 END DO
+                 ! ALT is normally inverse dry-air density: m3 kg-1.
+                 ! Therefore concentration [kg m-3] * ALT [m3 kg-1]
+                 ! gives mixing ratio [kg kg-1].
+                 scalar(i,k,j,P_QMBGAER) = MAX(0.0,               &
+                                              mass_total * grid%alt(i,k,j))
+                 scalar(i,k,j,P_QNBGAER) = MAX(0.0,                       &
+                              number_total            &
+                              * grid%alt(i,k,j))
+
+                 scalar(i,k,j,P_QABGAER) = MAX(0.0,                       &
+                              area_total              &
+                              * grid%alt(i,k,j))
+              END DO
+           END DO
+        END DO
+   ENDIF
+!        WRITE(0,*) 'After write:', aerocu(:,5,10,2)
+!        WRITE(0,*) 'After write: ', &
+!             MINVAL(scalar(:,:,:,P_QMBGAER)), &
+!                MAXVAL(scalar(:,:,:,P_QMBGAER)), P_QMBGAER,mass_total,config_flags%mp_physics,config_flags%aercu_opt, &
+!        MORR_TM_AERO, id
+
       if (config_flags%insert_init_cloud .AND.                          &
                     (P_QC .gt. PARAM_FIRST_SCALAR .AND.                 &
                      P_QI .gt. PARAM_FIRST_SCALAR)) then
@@ -4938,6 +5093,10 @@ endif
             END DO
          END DO
       END IF
+
+        DEALLOCATE(aerotcu)
+        DEALLOCATE(aeroptcu)
+        DEALLOCATE(aerovar)
 
 #ifdef DM_PARALLEL
 # include "HALO_EM_INIT_1.inc"
