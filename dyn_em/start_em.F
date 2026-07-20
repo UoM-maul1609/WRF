@@ -6,6 +6,13 @@
 !
 )
 
+      use module_configure, only :  locate_spray_sources , &
+        num_spray_sources1, spray_source_lat,         &
+         spray_source_lon, &
+         spray_source_domain, spray_source_i, spray_source_j, &
+         spray_on_the_task, spray_number_rate, spray_mode_diameter, &
+         spray_geometric_sigma, spray_particle_density
+
    USE module_domain, ONLY : domain, wrfu_timeinterval, get_ijk_from_grid, &
         domain_setgmtetc, get_ijk_from_subgrid
    USE module_state_description
@@ -149,6 +156,17 @@
    logical :: is_cfbm_initialized = .false.
 #endif
 
+#ifdef DM_PARALLEL
+      ! Broadcast spray source arrays to all ranks
+      CALL wrf_dm_bcast_integer(num_spray_sources1, 1)
+      CALL wrf_dm_bcast_integer(spray_source_domain, num_spray_sources1)
+      CALL wrf_dm_bcast_real(spray_source_lat, num_spray_sources1)
+      CALL wrf_dm_bcast_real(spray_source_lon, num_spray_sources1)
+      CALL wrf_dm_bcast_real(spray_number_rate, num_spray_sources1)
+      CALL wrf_dm_bcast_real(spray_mode_diameter, num_spray_sources1)
+      CALL wrf_dm_bcast_real(spray_geometric_sigma, num_spray_sources1)
+      CALL wrf_dm_bcast_real(spray_particle_density, num_spray_sources1)
+#endif
 
    CALL get_ijk_from_grid ( grid ,                              &
                            ids, ide, jds, jde, kds, kde,        &
@@ -2369,6 +2387,12 @@ endif
 
 
      CALL wrf_debug ( 100 , 'start_domain_em: Returning' )
+
+   CALL locate_spray_sources(grid,config_flags, num_spray_sources1, spray_source_lat, spray_source_lon, &
+                              spray_source_domain, spray_source_i, spray_source_j, &
+                              spray_on_the_task, &
+        ips, ipe,jps,jpe )
+
 
      RETURN
 

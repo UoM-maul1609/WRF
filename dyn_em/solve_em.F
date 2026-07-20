@@ -5,6 +5,9 @@ SUBROUTINE solve_em ( grid , config_flags  &
 #include "dummy_new_args.inc"
 !
                     )
+
+!        USE module_configure, ONLY : add_spray_increment
+
 ! Driver layer modules
    USE module_state_description
    USE module_domain, ONLY : &
@@ -13,7 +16,7 @@ SUBROUTINE solve_em ( grid , config_flags  &
                  ,domain_get_sim_start_time, domain_clock_get,is_alarm_tstep
    USE module_domain_type, ONLY : history_alarm, restart_alarm, auxinput4_alarm            &
                  ,boundary_alarm
-   USE module_configure, ONLY : grid_config_rec_type
+   USE module_configure, ONLY : grid_config_rec_type, add_spray_increment
    USE module_driver_constants
    USE module_machine
    USE module_tiles, ONLY : set_tiles
@@ -2962,6 +2965,8 @@ BENCH_END(tracer_adv_tim)
                                  k_start    , k_end               )
 
            IF( rk_step == 1 ) THEN
+
+                   
              IF ( config_flags%nested .OR. &
                 ( config_flags%specified .AND. config_flags%have_bcs_scalar ) .OR. &
                 ( ( is .EQ. P_QNWFA .OR. is .EQ. P_QNIFA .OR. is .EQ. P_QNBCA) .AND. config_flags%aer_init_opt .GT. 0) ) THEN
@@ -3102,6 +3107,39 @@ BENCH_END(tracer_adv_tim)
              ENDIF
 
            ENDIF
+           !---------------------------------------------------------------
+           ! Apply the continuous spray source once per completed WRF
+           ! timestep, after the final RK scalar update.
+           !---------------------------------------------------------------
+
+           IF (rk_step == 3 .AND.                               &
+               config_flags%mp_physics == MORR_TM_AERO .AND.    &
+               config_flags%num_spray_sources > 0 .AND.         &
+               (is == P_QNSPRAER .OR.                           &
+                is == P_QASPRAER .OR.                           &
+                is == P_QMSPRAER)) THEN
+
+              CALL add_spray_increment(                         &
+                   scalar(ims,kms,jms,is),                      &
+                   is,                                          &
+                   grid%id,                                     &
+                   config_flags%num_spray_sources,              &
+                   grid%dt,                                     &
+                   grid%alt,                                    &
+                   grid%ph_2,                                   &
+                   grid%phb,                                    &
+                   grid%msftx,                                  &
+                   grid%msfty,                                  &
+                   grid%dx,                                     &
+                   grid%dy,                                     &
+                   ids, ide, jds, jde, kds, kde,                &
+                   ims, ime, jms, jme, kms, kme,                &
+                   grid%i_start(ij), grid%i_end(ij),            &
+                   grid%j_start(ij), grid%j_end(ij),            &
+                   k_start, k_end )
+
+           END IF
+
 
          ENDDO scalar_tile_loop_2
          !$OMP END PARALLEL DO

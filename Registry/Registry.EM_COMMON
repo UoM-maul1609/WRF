@@ -2551,6 +2551,8 @@ rconfig   integer num_snow_layers         namelist,physics	1             3      
 rconfig   integer num_snso_layers         namelist,physics	1             7       irh    "num_snso_layers"               "number of snow & soil layers noahmp"      ""
 rconfig   integer num_radn_layers         namelist,physics      1             2       irh    "num_radn_layers"               "number of radiation band noahmp"      ""
 
+rconfig integer num_spray_sources namelist,physics 1 0 h "num_spray_sources" "Number of active spray sources" ""
+
 rconfig   integer num_urban_ndm           derived               1             1       irh    "num_urban_ndm"   "maximum number of street dimensions (ndm in BEP or BEM header)"                     ""
 rconfig   integer num_urban_ng            derived               1             1       irh    "num_urban_ng"    "number of grid levels in the ground (ng_u in BEP or BEM header)"                    ""
 rconfig   integer num_urban_nwr           derived               1             1       irh    "num_urban_nwr"   "number of grid levels in the walls or roof (nwr_u in BEP or BEM header)"            ""
