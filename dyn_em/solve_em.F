@@ -3117,6 +3117,7 @@ BENCH_END(tracer_adv_tim)
                config_flags%num_spray_sources > 0 .AND.         &
                (is == P_QNSPRAER .OR.                           &
                 is == P_QASPRAER .OR.                           &
+                is == P_QWSPRAER .OR.                           &
                 is == P_QMSPRAER)) THEN
 
               CALL add_spray_increment(                         &
@@ -4039,6 +4040,14 @@ BENCH_START(micro_driver_tim)
       &        , QNR_CURR=scalar(ims,kms,jms,P_QNR), F_QNR=F_QNR          &
       &        , QNS_CURR=scalar(ims,kms,jms,P_QNS), F_QNS=F_QNS          &
       &        , QNG_CURR=scalar(ims,kms,jms,P_QNG), F_QNG=F_QNG          &
+      &        , spray_equilibrium_curr=grid%spray_equilibrium & ! PJC
+      &        , QNBGAER_CURR=scalar(ims,kms,jms,P_QNBGAER), F_QNBGAER=F_QNBGAER          & ! PJC
+      &        , QABGAER_CURR=scalar(ims,kms,jms,P_QABGAER), F_QABGAER=F_QABGAER          & ! PJC
+      &        , QMBGAER_CURR=scalar(ims,kms,jms,P_QMBGAER), F_QMBGAER=F_QMBGAER          & ! PJC
+      &        , QNSPRAER_CURR=scalar(ims,kms,jms,P_QNSPRAER), F_QNSPRAER=F_QNSPRAER          & ! PJC
+      &        , QASPRAER_CURR=scalar(ims,kms,jms,P_QASPRAER), F_QASPRAER=F_QASPRAER          & ! PJC
+      &        , QMSPRAER_CURR=scalar(ims,kms,jms,P_QMSPRAER), F_QMSPRAER=F_QMSPRAER          & ! PJC
+      &        , QWSPRAER_CURR=scalar(ims,kms,jms,P_QWSPRAER), F_QWSPRAER=F_QWSPRAER          & ! PJC
       &        , QNWFA_CURR=scalar(ims,kms,jms,P_QNWFA), F_QNWFA=F_QNWFA  & ! for Thompson water-friendly aerosol
       &        , QNIFA_CURR=scalar(ims,kms,jms,P_QNIFA), F_QNIFA=F_QNIFA  & ! for Thompson ice-friendly aerosol
       &        , QNBCA_CURR=scalar(ims,kms,jms,P_QNBCA), F_QNBCA=F_QNBCA  & ! for Thompson black carbon aerosol

@@ -555,6 +555,8 @@ state   real    qaspraer       ikjftb  scalar      1         -     \
    i0rhusdf=(bdy_interp:dt)    "QASPRAER"      "Spray aerosol surface area mixing ratio" "m(2) kg(-1)"
 state   real    qmspraer       ikjftb  scalar      1         -     \
    i0rhusdf=(bdy_interp:dt)    "QMSPRAER"      "Spray aerosol dry mass mixing ratio" "kg kg(-1)"
+state   real    qwspraer        ikjftb  scalar       1         -     \
+   i0rhusdf=(bdy_interp:dt)    "QWSPRAER"      "Spray aerosol-associated water mixing ratio"   "kg kg(-1)"
 state   real    qvolg          ikjftb  scalar      1         -     \
    i0rhusdf=(bdy_interp:dt)    "QVGRAUPEL"     "Graupel Particle Volume" "m(3) kg(-1) or L kg(-1) for TEMPO"
 state   real    qvolh          ikjftb  scalar      1         -     \
@@ -613,6 +615,20 @@ state   real    dfi_qnn        ikjftb  dfi_scalar      1         -     \
    rusdf=(bdy_interp:dt)    "DFI_QNCC"      "DFI CNN Number concentration"   "# kg(-1)"
 state   real    dfi_qnc        ikjftb  dfi_scalar      1         -     \
    rusdf=(bdy_interp:dt)    "DFI_QNCLOUD"   "DFI Cloud Number concentration" "# kg(-1)"
+state   real    dfi_qnbgaer    ikjftb  dfi_scalar      1         -     \
+   rusdf=(bdy_interp:dt)    "DFI_QNBGAER"   "DFI BG Aer Number concentration" "# kg(-1)"
+state   real    dfi_qabgaer    ikjftb  dfi_scalar      1         -     \
+   rusdf=(bdy_interp:dt)    "DFI_QABGAER"   "DFI BG Aer Area concentration" "# kg(-1)"
+state   real    dfi_qmbgaer    ikjftb  dfi_scalar      1         -     \
+   rusdf=(bdy_interp:dt)    "DFI_QMBGAER"   "DFI BG Aer Mass concentration" "# kg(-1)"
+state   real    dfi_qnspraer    ikjftb  dfi_scalar      1         -     \
+   rusdf=(bdy_interp:dt)    "DFI_QNSPRAER"   "DFI Spray Aer Number concentration" "# kg(-1)"
+state   real    dfi_qaspraer    ikjftb  dfi_scalar      1         -     \
+   rusdf=(bdy_interp:dt)    "DFI_QASPRAER"   "DFI Spray Aer Area concentration" "# kg(-1)"
+state   real    dfi_qmspraer    ikjftb  dfi_scalar      1         -     \
+   rusdf=(bdy_interp:dt)    "DFI_QMSPRAER"   "DFI Spray Aer Mass concentration" "# kg(-1)"
+state   real    dfi_qwspraer    ikjftb  dfi_scalar      1         -     \
+   rusdf=(bdy_interp:dt)    "DFI_QWSPRAER"   "DFI Spray Water Mass concentration" "# kg(-1)"
 state   real    dfi_qzr        ikjftb  dfi_scalar      1         -     \
    rhusdf=(bdy_interp:dt)   "DFI_QZRAIN" "DFI Rain Reflectivity" "m(6) kg(-1)"
 state   real    dfi_qzg        ikjftb  dfi_scalar      1         -     \
@@ -2552,7 +2568,7 @@ rconfig   integer num_snso_layers         namelist,physics	1             7      
 rconfig   integer num_radn_layers         namelist,physics      1             2       irh    "num_radn_layers"               "number of radiation band noahmp"      ""
 
 rconfig integer num_spray_sources namelist,physics 1 0 h "num_spray_sources" "Number of active spray sources" ""
-
+rconfig logical spray_equilibrium namelist,physics 1 .false. irh "spray_equilibrium" "Enable spray water equilibrium" ""
 rconfig   integer num_urban_ndm           derived               1             1       irh    "num_urban_ndm"   "maximum number of street dimensions (ndm in BEP or BEM header)"                     ""
 rconfig   integer num_urban_ng            derived               1             1       irh    "num_urban_ng"    "number of grid levels in the ground (ng_u in BEP or BEM header)"                    ""
 rconfig   integer num_urban_nwr           derived               1             1       irh    "num_urban_nwr"   "number of grid levels in the walls or roof (nwr_u in BEP or BEM header)"            ""
@@ -3110,7 +3126,7 @@ package   p3_1category    mp_physics==50               -             moist:qv,qc
 package   p3_1category_nc mp_physics==51               -             moist:qv,qc,qr,qi;scalar:qnc,qni,qnr,qir,qib;state:re_cloud,re_ice,vmi3d,rhopo3d,di3d,refl_10cm,th_old,qv_old
 package   p3_2category    mp_physics==52               -             moist:qv,qc,qr,qi,qi2;scalar:qnc,qni,qnr,qir,qib,qni2,qir2,qib2;state:re_cloud,re_ice,vmi3d,rhopo3d,di3d,vmi3d_2,rhopo3d_2,di3d_2,refl_10cm,th_old,qv_old
 package   p3_1cat_3mom    mp_physics==53               -             moist:qv,qc,qr,qi;scalar:qnc,qni,qnr,qir,qib,qzi;state:re_cloud,re_ice,vmi3d,rhopo3d,di3d,refl_10cm,th_old,qv_old
-package   morr_tm_aero    mp_physics==40               -             moist:qv,qc,qr,qi,qs,qg;scalar:qnc,qni,qns,qnr,qng,qnbgaer,qabgaer,qmbgaer,qnspraer,qaspraer,qmspraer;state:rqrcuten,rqscuten,rqicuten,EFCG,EFIG,EFSG,WACT,CCN1_GS,CCN2_GS,CCN3_GS,CCN4_GS,CCN5_GS,CCN6_GS,CCN7_GS,re_cloud,re_ice,re_snow,mskf_refl_10cm
+package   morr_tm_aero    mp_physics==40               -             moist:qv,qc,qr,qi,qs,qg;scalar:qnc,qni,qns,qnr,qng,qnbgaer,qabgaer,qmbgaer,qnspraer,qaspraer,qmspraer,qwspraer;state:rqrcuten,rqscuten,rqicuten,EFCG,EFIG,EFSG,WACT,CCN1_GS,CCN2_GS,CCN3_GS,CCN4_GS,CCN5_GS,CCN6_GS,CCN7_GS,re_cloud,re_ice,re_snow,mskf_refl_10cm
 package   jensen_ishmael  mp_physics==55               -             moist:qv,qc,qr,qi,qi2,qi3;scalar:qnr,qni,qvoli,qaoli,qni2,qvoli2,qaoli2,qni3,qvoli3,qaoli3;state:re_cloud,re_ice,vmi3d,rhopo3d,di3d,phii3d,itype,vmi3d_2,rhopo3d_2,di3d_2,phii3d_2,itype_2,vmi3d_3,rhopo3d_3,di3d_3,phii3d_3,itype_3,refl_10cm
 package   ntu             mp_physics==56               -             moist:qv,qc,qr,qi,qs,qg,qh;scalar:qnc,qnr,qni,qns,qng,qnh,qdcn,qtcn,qccn,qrcn,qnin,fi,fs,vi,vs,vg,ai,as,ag,ah,i3m
 package   etampnew        mp_physics==95               -             moist:qv,qc,qr,qs;scalar:qt;state:f_ice_phy,f_rain_phy,f_rimef_phy

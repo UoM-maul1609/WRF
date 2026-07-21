@@ -707,6 +707,13 @@ END SUBROUTINE MORR_TWO_MOMENT_INIT_AERO
 
 SUBROUTINE MP_MORR_TWO_MOMENT_AERO(ITIMESTEP,                    &
                 TH, QV, QC, QR, QI, QS, QG, NI, NS, NR, NG, NC,  & !TWG/amy add
+                spray_equilibrium, & ! PJC
+             QNBGAER, QABGAER , QMBGAER, &                       ! PJC
+             QNSPRAER, QASPRAER , QMSPRAER, &                    ! PJC
+             QWSPRAER, &                                         ! PJC
+             F_QNBGAER, F_QABGAER ,F_QMBGAER, &                       ! PJC
+             F_QNSPRAER, F_QASPRAER ,F_QMSPRAER, &                    ! PJC
+             F_QWSPRAER,   &                                          ! PJC
                 RHO, PII, P, DT_IN, DZ, HT, W, KZH,     &
                 RAINNC, RAINNCV, SR,                    &
 		SNOWNC,SNOWNCV,GRAUPELNC,GRAUPELNCV,    & ! hm added 7/13/13
@@ -805,7 +812,12 @@ SUBROUTINE MP_MORR_TWO_MOMENT_AERO(ITIMESTEP,                    &
    REAL, DIMENSION(ims:ime, kms:kme, jms:jme), INTENT(INOUT):: &
                           qv, qc, qr, qi, qs, qg, ni, ns, nr, TH, NG, NC !TWG add   
 !jdf                      qndrop ! hm added, wrf-chem
-   REAL, DIMENSION(ims:ime, kms:kme, jms:jme), optional,INTENT(INOUT):: qndrop
+   REAL, DIMENSION(ims:ime, kms:kme, jms:jme), optional,INTENT(INOUT):: qndrop,              &
+        QNBGAER, QABGAER , QMBGAER, &                       ! PJC
+        QNSPRAER, QASPRAER , QMSPRAER, &                    ! PJC
+        QWSPRAER                                            ! PJC
+
+   logical, optional, intent(in) :: spray_equilibrium  ! PJC
 !jdf  REAL, DIMENSION(ims:ime, kms:kme, jms:jme),INTENT(INOUT):: CSED3D, &
    REAL, DIMENSION(ims:ime, kms:kme, jms:jme), optional,INTENT(INOUT):: QLSINK, &
                           rainprod, evapprod, &
@@ -870,7 +882,11 @@ SUBROUTINE MP_MORR_TWO_MOMENT_AERO(ITIMESTEP,                    &
    REAL, DIMENSION(ims:ime, kms:kme, jms:jme), INTENT(IN):: &
       qrcuten, qscuten, qicuten
 
-  LOGICAL, INTENT(IN), OPTIONAL ::                F_QNDROP  ! wrf-chem
+  LOGICAL, INTENT(IN), OPTIONAL ::                F_QNDROP, &  ! wrf-chem
+             F_QNBGAER, F_QABGAER ,F_QMBGAER, &                       ! PJC
+             F_QNSPRAER, F_QASPRAER ,F_QMSPRAER, &                    ! PJC
+             F_QWSPRAER                                               ! PJC
+
   LOGICAL :: flag_qndrop  ! wrf-chem
   integer :: iinum ! wrf-chem
 
@@ -1079,6 +1095,41 @@ SUBROUTINE MP_MORR_TWO_MOMENT_AERO(ITIMESTEP,                    &
 ! TWG 2016 END
       ENDDO
    ENDIF
+
+        !-----------------------------------------------------------------------
+        ! Instantaneous equilibrium of spray-associated water with water vapour.
+        !
+        ! This is done before the main Morrison microphysics calculation so that
+        ! Morrison receives thermodynamically adjusted T and QV.
+        !-----------------------------------------------------------------------
+
+        IF ( PRESENT(QMSPRAER) .AND. PRESENT(QWSPRAER) .and. spray_equilibrium ) THEN
+
+           IF ( PRESENT(F_QMSPRAER) .AND. PRESENT(F_QWSPRAER) ) THEN
+
+              IF (F_QMSPRAER .AND. F_QWSPRAER) THEN
+
+                 DO k = kts, kte
+
+                    IF (QMSPRAER(i,k,j) > 0.0 .OR.              &
+                        QWSPRAER(i,k,j) > 0.0) THEN
+
+                       CALL EQUILIBRATE_SPRAY_WATER(             &
+                            T1D(k),                              &
+                            QV1D(k),                             &
+                            P1D(k),                              &
+                            QMSPRAER(i,k,j),                     &
+                            QWSPRAER(i,k,j) )
+
+                    END IF
+
+                 END DO
+
+              END IF
+
+           END IF
+
+        END IF
 
 !jdf  end do
 
@@ -6180,6 +6231,286 @@ subroutine mdm_prescribed_hetero(T,ww,Ns,Nis,Nid)
       end function mdm_prescribed_polysvp
 
 !TWG 2016 END
+
+! PJC
+SUBROUTINE EQUILIBRATE_SPRAY_WATER(                     &
+     temperature, qvapor, pressure,                     &
+     qdry_spray, qwater_spray )
+
+   IMPLICIT NONE
+
+   !--------------------------------------------------------------------
+   ! Arguments
+   !
+   ! temperature   : air temperature [K]
+   ! qvapor        : water-vapour mixing ratio
+   !                 [kg water kg-1 dry air]
+   ! pressure      : air pressure [Pa]
+   ! qdry_spray    : dry spray-aerosol mass mixing ratio
+   !                 [kg dry aerosol kg-1 dry air]
+   ! qwater_spray  : spray-associated liquid-water mixing ratio
+   !                 [kg water kg-1 dry air]
+   !--------------------------------------------------------------------
+
+   REAL, INTENT(INOUT) :: temperature
+   REAL, INTENT(INOUT) :: qvapor
+   REAL, INTENT(IN)    :: pressure
+   REAL, INTENT(IN)    :: qdry_spray
+   REAL, INTENT(INOUT) :: qwater_spray
+
+   !--------------------------------------------------------------------
+   ! Local variables
+   !--------------------------------------------------------------------
+
+   INTEGER :: iter
+
+   REAL :: temperature_initial
+   REAL :: qvapor_initial
+   REAL :: qwater_initial
+   REAL :: total_exchangeable_water
+
+   REAL :: qw_low
+   REAL :: qw_high
+   REAL :: qw_trial
+   REAL :: delta_qevap
+
+   REAL :: qv_trial
+   REAL :: temperature_trial
+
+   REAL :: esat
+   REAL :: vapor_pressure
+   REAL :: relative_humidity
+   REAL :: relative_humidity_initial
+   REAL :: water_activity
+   REAL :: residual
+
+   REAL :: latent_heat
+   REAL :: effective_cp
+   REAL :: convergence_scale
+
+   !--------------------------------------------------------------------
+   ! Constants
+   !--------------------------------------------------------------------
+
+   REAL, PARAMETER :: molecular_weight_water = 0.01801528
+   REAL, PARAMETER :: molecular_weight_nacl  = 0.05844277
+
+   ! Ideal complete dissociation of NaCl.
+   REAL, PARAMETER :: vant_hoff_factor = 2.0
+
+   REAL, PARAMETER :: epsilon_water_air = 0.622
+
+   REAL, PARAMETER :: qdry_min  = 1.0E-20
+   REAL, PARAMETER :: qwater_min = 1.0E-20
+
+   REAL, PARAMETER :: pressure_min = 100.0
+
+   REAL, PARAMETER :: relative_tolerance = 1.0E-6
+   REAL, PARAMETER :: absolute_tolerance = 1.0E-12
+   REAL, PARAMETER :: residual_tolerance = 1.0E-6
+   REAL, PARAMETER :: transition_rh = 0.98
+
+   INTEGER, PARAMETER :: max_iterations = 60
+
+   !--------------------------------------------------------------------
+   ! Initial validation
+   !--------------------------------------------------------------------
+
+   IF (pressure <= pressure_min) RETURN
+
+   qvapor       = MAX(qvapor,0.0)
+   qwater_spray = MAX(qwater_spray,0.0)
+
+   IF (qwater_spray <= qwater_min) THEN
+      qwater_spray = 0.0
+      RETURN
+   END IF
+
+   temperature_initial = temperature
+   qvapor_initial      = qvapor
+   qwater_initial      = qwater_spray
+
+   total_exchangeable_water = qvapor_initial + qwater_initial
+
+   ! Temperature-dependent latent heat, evaluated at the initial state.
+   ! This is consistent with the simple expression commonly used in
+   ! Morrison.
+   latent_heat = 3.1484E6 - 2370.0*temperature_initial
+
+   ! Approximate moist-air heat capacity.
+   ! CP is assumed to be available from the module scope.
+   effective_cp = CP*(1.0 + 0.887*qvapor_initial)
+   effective_cp = MAX(effective_cp,500.0)
+
+   !--------------------------------------------------------------------
+   ! Calculate the initial relative humidity with respect to liquid
+   ! water.
+   !
+   ! POLYSVP(T,0) is assumed to return saturation vapour pressure over
+   ! liquid water in Pa, as used elsewhere in the Morrison scheme.
+   !--------------------------------------------------------------------
+
+   esat = MIN(0.99*pressure,                             &
+              MAX(POLYSVP(temperature_initial,0),1.0))
+
+   vapor_pressure = pressure*qvapor_initial /            &
+        MAX(epsilon_water_air+qvapor_initial,            &
+            epsilon_water_air)
+
+   relative_humidity_initial = vapor_pressure/esat
+
+   !====================================================================
+   ! Above the transition RH, hand all spray water to vapour.
+   !
+   ! This is evaporation, so apply latent cooling now.
+   ! Morrison may subsequently condense some of the resulting vapour,
+   ! in which case its normal saturation adjustment will return the
+   ! corresponding latent heat.
+   !====================================================================
+
+   IF (relative_humidity_initial >= transition_rh) THEN
+
+       delta_qevap = qwater_spray
+
+       qvapor       = qvapor + delta_qevap
+       qwater_spray = 0.0
+
+       temperature = temperature -                          &
+                         latent_heat*delta_qevap/effective_cp
+
+       RETURN
+
+   END IF
+
+
+   !====================================================================
+   ! No dry aerosol is available to retain liquid water.
+   ! Evaporate all spray water and apply latent cooling.
+   !====================================================================
+
+   IF (qdry_spray <= qdry_min) THEN
+
+       delta_qevap = qwater_spray
+
+       qvapor       = qvapor + delta_qevap
+       qwater_spray = 0.0
+
+       temperature = temperature -                          &
+                         latent_heat*delta_qevap/effective_cp
+
+       RETURN
+
+   END IF
+
+   !====================================================================
+   ! Subsaturated saline-aerosol equilibrium
+   !
+   ! Solve:
+   !
+   !       RH = a_w
+   !
+   ! where the ideal-solution water activity is
+   !
+   !                     n_water
+   !       a_w = -----------------------------
+   !              n_water + nu * n_NaCl
+   !
+   ! and Kelvin curvature is omitted.
+   !
+   ! The unknown is the final spray-water mixing ratio.
+   !====================================================================
+
+   ! The final spray-water amount must lie between zero and all locally
+   ! exchangeable water.
+   qw_low  = 0.0
+   qw_high = total_exchangeable_water
+
+   convergence_scale = MAX(absolute_tolerance,           &
+        relative_tolerance*total_exchangeable_water)
+
+   DO iter = 1, max_iterations
+
+      qw_trial = 0.5*(qw_low+qw_high)
+
+      ! Conserve local exchangeable water.
+      qv_trial = total_exchangeable_water-qw_trial
+      qv_trial = MAX(qv_trial,0.0)
+
+      ! Approximate enthalpy conservation:
+      !
+      ! condensation onto aerosol: qw increases, T increases
+      ! evaporation from aerosol:  qw decreases, T decreases
+      temperature_trial = temperature_initial            &
+           + latent_heat*(qw_trial-qwater_initial)       &
+           / effective_cp
+
+      ! Avoid unphysical trial temperatures entering POLYSVP.
+      temperature_trial = MAX(150.0,MIN(350.0,           &
+                                       temperature_trial))
+
+      esat = MIN(0.99*pressure,                          &
+                 MAX(POLYSVP(temperature_trial,0),1.0))
+
+      vapor_pressure = pressure*qv_trial /               &
+           MAX(epsilon_water_air+qv_trial,               &
+               epsilon_water_air)
+
+      relative_humidity = vapor_pressure/esat
+      relative_humidity = MAX(0.0,relative_humidity)
+
+      ! Ideal NaCl solution water activity.
+      IF (qw_trial <= qwater_min) THEN
+
+         water_activity = 0.0
+
+      ELSE
+
+         water_activity =                              &
+              (qw_trial/molecular_weight_water) /       &
+              ( (qw_trial/molecular_weight_water)       &
+              + vant_hoff_factor                       &
+              * qdry_spray/molecular_weight_nacl )
+
+      END IF
+
+      water_activity = MAX(0.0,MIN(1.0,water_activity))
+
+      residual = relative_humidity-water_activity
+
+      IF (ABS(residual) <= residual_tolerance) EXIT
+
+      ! At low qw, RH is generally greater than water activity.
+      ! Increasing qw transfers vapour into aerosol water, reduces RH
+      ! and increases water activity.
+      IF (residual > 0.0) THEN
+         qw_low = qw_trial
+      ELSE
+         qw_high = qw_trial
+      END IF
+
+      IF (ABS(qw_high-qw_low) <= convergence_scale) EXIT
+
+   END DO
+
+   !--------------------------------------------------------------------
+   ! Apply the converged state once.
+   !--------------------------------------------------------------------
+
+   qwater_spray = 0.5*(qw_low+qw_high)
+
+   qwater_spray = MAX(0.0,                              &
+                      MIN(qwater_spray,                  &
+                          total_exchangeable_water))
+
+   qvapor = total_exchangeable_water-qwater_spray
+   qvapor = MAX(qvapor,0.0)
+
+   temperature = temperature_initial                    &
+        + latent_heat*(qwater_spray-qwater_initial)     &
+        / effective_cp
+
+END SUBROUTINE EQUILIBRATE_SPRAY_WATER
+
 END MODULE module_mp_morr_two_moment_aero
 !+---+-----------------------------------------------------------------+
 !+---+-----------------------------------------------------------------+

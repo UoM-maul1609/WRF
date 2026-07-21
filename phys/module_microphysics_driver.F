@@ -51,7 +51,12 @@ SUBROUTINE microphysics_driver(                                          &
                       ,qnic_curr,qnip_curr,qnid_curr &
                       ,qndrop_curr,qni_curr,qh_curr,qnh_curr             &
                       ,qzr_curr,qzi_curr,qzs_curr,qzg_curr,qzh_curr      &
-                      ,qns_curr,qnr_curr,qng_curr,qnn_curr,qnc_curr      &
+                      ,qns_curr,qnr_curr,qng_curr &
+                      , spray_equilibrium_curr & ! PJC
+                      ,QNBGAER_CURR, QABGAER_CURR , QMBGAER_CURR &              ! PJC
+                      ,QNSPRAER_CURR, QASPRAER_CURR , QMSPRAER_CURR &           ! PJC
+                      ,QWSPRAER_CURR  &                                        ! PJC
+                      , qnn_curr,qnc_curr      &
                       ,qnwfa_curr,qnifa_curr,qnbca_curr                  & ! for water/ice-friendly/black carbon aerosols
                       ,f_qnwfa,f_qnifa,f_qnbca                           & ! for water/ice-friendly/black carbon aerosols
                       ,qvolg_curr,qvolh_curr                             &
@@ -70,6 +75,9 @@ SUBROUTINE microphysics_driver(                                          &
                       ,f_qv,f_qc,f_qr,f_qi,f_qs,f_qg,f_qndrop,f_qni      &
                       ,f_qns,f_qnr,f_qng,f_qnc,f_qnn,f_qh,f_qnh          &
                       ,            f_qzr,f_qzi,f_qzs,f_qzg,f_qzh         &
+                      ,F_QNBGAER, F_QABGAER , F_QMBGAER &                       ! PJC
+                      ,F_QNSPRAER, F_QASPRAER , F_QMSPRAER &                    ! PJC
+                      ,F_QWSPRAER   &                                           ! PJC
                       ,f_qvolg,f_qvolh                                   &
                       ,f_qic,f_qip,f_qid                                 &
                       ,f_qnic,f_qnip,f_qnid                              &
@@ -659,6 +667,9 @@ REAL, DIMENSION( ims:ime, kms:kme, jms:jme ),                        &
                  ,qic_curr,qip_curr,qid_curr &
                  ,qnic_curr,qnip_curr,qnid_curr &
                  ,qzr_curr,qzi_curr,qzs_curr,qzg_curr,qzh_curr    &
+                 ,qnbgaer_curr, qabgaer_curr, qmbgaer_curr        &  ! PJC
+                 ,qnspraer_curr, qaspraer_curr, qmspraer_curr     &  ! PJC
+                 ,qwspraer_curr                                   &  ! PJC
                  ,qir_curr,qib_curr                               & ! for P3
                  ,qi2_curr,qni2_curr,qir2_curr,qib2_curr          & ! for P3
                  ,qvoli_curr,qaoli_curr                           & ! for Jensen ISHMAEL
@@ -673,6 +684,8 @@ REAL, DIMENSION( ims:ime, kms:kme, jms:jme ),                        &
                  ,kext_ft_qs,kext_ft_qg                           &
                  ,qnwfa_curr,qnifa_curr,qnbca_curr                & ! Added by G. Thompson
                  ,qvolg_curr,qvolh_curr,qrimef_curr
+
+   logical, optional, intent(in) :: spray_equilibrium_curr  !PJC
 
    REAL, DIMENSION( ims:ime, kms:kme, jms:jme ),                  &
          OPTIONAL,                                                &
@@ -748,6 +761,9 @@ REAL, DIMENSION( ims:ime, kms:kme, jms:jme ),                        &
                       ,f_qnic,f_qnip,f_qnid                                  &
                        ,f_qzi,f_qzs,f_qzg,f_qzh,f_qvolg,f_qvolh              &
                        ,f_qrimef                                             &
+                       ,f_qnbgaer,f_qabgaer,f_qmbgaer                        & ! PJC
+                       ,f_qnspraer,f_qaspraer,f_qmspraer                     & ! PJC
+                       ,f_qwspraer                                            & ! PJC
                        ,f_qir,f_qib                                          & ! for P3
                        ,f_qi2,f_qni2,f_qir2,f_qib2                           & ! for P3
                        ,f_qvoli,f_qaoli                                      & ! for Jensen ISHMAEL
@@ -1992,6 +2008,17 @@ REAL, DIMENSION( ims:ime, kms:kme, jms:jme ),                        &
                      NR=qnr_curr,                        &  !* ! VVT
                      NG=qng_curr,                        &  !* ! VVT
                      NC=qnc_curr,                        &  ! TWG/amy added nc
+                     spray_equilibrium=spray_equilibrium_curr, & ! PJC
+                     QNBGAER=qnbgaer_curr, QABGAER=qabgaer_curr , &
+                     QMBGAER=qmbgaer_curr, &                       ! PJC
+                     QNSPRAER=qnspraer_curr, QASPRAER=qaspraer_curr , &
+                     QMSPRAER=qmspraer_curr, &                    ! PJC
+                     QWSPRAER=qwspraer_curr,   &                                           ! PJC
+                     F_QNBGAER=f_qnbgaer, F_QABGAER=f_qabgaer , &
+                     F_QMBGAER=f_qmbgaer, &                       ! PJC
+                     F_QNSPRAER=f_qnspraer, F_QASPRAER=f_qaspraer , &
+                     F_QMSPRAER=f_qmspraer, &                    ! PJC
+                     F_QWSPRAER=f_qwspraer,   &                                           ! PJC
                      KZH=exch_h,                         &  ! TWG/amy add
                      RHO=rho,                            &  !*
                      PII=pi_phy,                         &  !*

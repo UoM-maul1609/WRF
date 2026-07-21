@@ -101,6 +101,9 @@ MODULE module_configure
    REAL, SAVE :: spray_mode_diameter(MAX_SPRAY_SOURCES)
    REAL, SAVE :: spray_geometric_sigma(MAX_SPRAY_SOURCES)
    REAL, SAVE :: spray_particle_density(MAX_SPRAY_SOURCES)
+   REAL, SAVE :: spray_particle_salinity(MAX_SPRAY_SOURCES)
+   REAL, SAVE :: spray_particle_molw(MAX_SPRAY_SOURCES)
+   REAL, SAVE :: spray_particle_nu(MAX_SPRAY_SOURCES)
    INTEGER, SAVE :: spray_source_i(MAX_SPRAY_SOURCES)
    INTEGER, SAVE :: spray_source_j(MAX_SPRAY_SOURCES)
    integer, save :: num_spray_sources1
@@ -108,388 +111,7 @@ MODULE module_configure
 
 CONTAINS
 
-SUBROUTINE locate_spray_sources(                         &
-     current_grid, config_flags,                         &
-     num_spray_sources,                                  &
-     spray_source_lat, spray_source_lon,                 &
-     spray_source_domain,                                &
-     spray_source_i, spray_source_j,                     &
-     spray_on_the_task, ips,ipe,jps,jpe )
 
-   USE module_domain_type, ONLY : domain
-
-   USE module_llxy, ONLY :                               &
-        proj_info, map_set, latlon_to_ij,                &
-        PROJ_LATLON, PROJ_LC, PROJ_PS, PROJ_MERC
-
-   IMPLICIT NONE
-
-   TYPE(domain), INTENT(IN) :: current_grid
-   TYPE(grid_config_rec_type), INTENT(IN) :: config_flags
-
-   INTEGER, INTENT(IN) :: num_spray_sources
-   INTEGER, INTENT(IN) :: ips, ipe, jps, jpe
-   REAL, INTENT(IN) :: spray_source_lat(:)
-   REAL, INTENT(IN) :: spray_source_lon(:)
-
-   INTEGER, INTENT(IN) :: spray_source_domain(:)
-
-   INTEGER, INTENT(INOUT) :: spray_source_i(:)
-   INTEGER, INTENT(INOUT) :: spray_source_j(:)
-
-   LOGICAL, INTENT(INOUT) :: spray_on_the_task(:)
-
-   TYPE(proj_info) :: proj
-
-   INTEGER :: n
-   INTEGER :: isrc, jsrc
-   INTEGER :: i_anchor, j_anchor
-   INTEGER :: ips_src, ipe_src
-   INTEGER :: jps_src, jpe_src
-
-   REAL :: i_val, j_val
-   REAL :: known_lat, known_lon
-   REAL :: latinc, loninc
-
-   LOGICAL :: on_patch
-
-   ! Select a valid mass-grid point on this MPI task.
-   !
-   ! The anchor latitude/longitude and knowni/knownj must refer to
-   ! exactly the same global WRF grid point.
-   !---------------------------------------------------------------
-   WRITE(0,*) '**SPRAY domain**', spray_source_domain
-   i_anchor = MAX(current_grid%sp31, current_grid%sd31)
-   j_anchor = MAX(current_grid%sp33, current_grid%sd33)
-
-   IF (i_anchor > current_grid%ep31 .OR.                 &
-       j_anchor > current_grid%ep33) THEN
-
-      WRITE(0,*) 'SPRAY ERROR: no valid local anchor:',  &
-                 ' domain=', current_grid%id,            &
-                 ' anchor=', i_anchor, j_anchor,         &
-                 ' patch=',                              &
-                 current_grid%sp31, current_grid%ep31,   &
-                 current_grid%sp33, current_grid%ep33
-
-      CALL wrf_error_fatal(                              &
-           'locate_spray_sources: no valid local anchor')
-
-   END IF
-
-   IF (i_anchor < LBOUND(current_grid%xlat,1) .OR.       &
-       i_anchor > UBOUND(current_grid%xlat,1) .OR.       &
-       j_anchor < LBOUND(current_grid%xlat,2) .OR.       &
-       j_anchor > UBOUND(current_grid%xlat,2)) THEN
-
-      WRITE(0,*) 'SPRAY ERROR: anchor outside XLAT:',    &
-                 ' domain=', current_grid%id,            &
-                 ' anchor=', i_anchor, j_anchor,         &
-                 ' XLAT bounds=',                        &
-                 LBOUND(current_grid%xlat,1),            &
-                 UBOUND(current_grid%xlat,1),            &
-                 LBOUND(current_grid%xlat,2),            &
-                 UBOUND(current_grid%xlat,2)
-
-      CALL wrf_error_fatal(                              &
-           'locate_spray_sources: anchor outside XLAT')
-
-   END IF
-
-   known_lat = current_grid%xlat (i_anchor,j_anchor)
-   known_lon = current_grid%xlong(i_anchor,j_anchor)
-
-   IF (known_lat /= known_lat .OR.                       &
-       known_lon /= known_lon .OR.                       &
-       ABS(known_lat) > 90.0 .OR.                       &
-       ABS(known_lon) > 360.0) THEN
-
-      WRITE(0,*) 'SPRAY ERROR: invalid anchor lat/lon:', &
-                 ' domain=', current_grid%id,            &
-                 ' anchor=', i_anchor, j_anchor,         &
-                 ' lat/lon=', known_lat, known_lon
-
-      CALL wrf_error_fatal(                              &
-           'locate_spray_sources: invalid anchor lat/lon')
-
-   END IF
-
-   !---------------------------------------------------------------
-   ! Report the projection values actually being used.
-   ! These must come from config_flags, not current_grid, because
-   ! current_grid%truelat1, etc. are zero in this setup.
-   !---------------------------------------------------------------
-
-   WRITE(0,*) 'SPRAY PROJECTION SETTINGS:',              &
-              ' domain=', current_grid%id,               &
-              ' map_proj=', config_flags%map_proj,       &
-              ' anchor i/j=', i_anchor, j_anchor,        &
-              ' anchor lat/lon=', known_lat, known_lon,  &
-              ' dx=', current_grid%dx,                   &
-              ' truelat1/2=',                            &
-              model_config_rec%truelat1(current_grid%id),                    &
-              model_config_rec%truelat2(current_grid%id),                    &
-              ' stand_lon=', model_config_rec%stand_lon(current_grid%id)
-
-   !---------------------------------------------------------------
-   ! Construct the projection for the current domain.
-   !---------------------------------------------------------------
-
-   SELECT CASE (config_flags%map_proj)
-
-   CASE (PROJ_MERC)
-
-      IF (ABS(model_config_rec%truelat1(current_grid%id)) > 90.0) THEN
-         CALL wrf_error_fatal(                           &
-              'Invalid truelat1 for Mercator spray mapping')
-      END IF
-
-      CALL map_set(                                      &
-           PROJ_MERC, proj,                              &
-           truelat1 = model_config_rec%truelat1(current_grid%id),            &
-           lat1     = known_lat,                         &
-           lon1     = known_lon,                         &
-           knowni   = REAL(i_anchor),                    &
-           knownj   = REAL(j_anchor),                    &
-           dx       = current_grid%dx)
-
-   CASE (PROJ_LC)
-
-      IF (ABS(model_config_rec%truelat1(current_grid%id)) < 1.0E-6 .AND.      &
-          ABS(model_config_rec%truelat2(current_grid%id)) < 1.0E-6) THEN
-
-         WRITE(0,*) 'SPRAY ERROR: invalid Lambert values:', &
-                    model_config_rec%truelat1(current_grid%id),               &
-                    model_config_rec%truelat2(current_grid%id),               &
-                    model_config_rec%stand_lon(current_grid%id)
-
-         CALL wrf_error_fatal(                           &
-              'Invalid Lambert parameters for spray mapping')
-
-      END IF
-
-      CALL map_set(                                      &
-           PROJ_LC, proj,                                &
-           truelat1 = model_config_rec%truelat1(current_grid%id),            &
-           truelat2 = model_config_rec%truelat2(current_grid%id),            &
-           stdlon   = model_config_rec%stand_lon(current_grid%id),           &
-           lat1     = known_lat,                         &
-           lon1     = known_lon,                         &
-           knowni   = REAL(i_anchor),                    &
-           knownj   = REAL(j_anchor),                    &
-           dx       = current_grid%dx)
-
-   CASE (PROJ_PS)
-
-      CALL map_set(                                      &
-           PROJ_PS, proj,                                &
-           truelat1 = model_config_rec%truelat1(current_grid%id),            &
-           stdlon   = model_config_rec%stand_lon(current_grid%id),           &
-           lat1     = known_lat,                         &
-           lon1     = known_lon,                         &
-           knowni   = REAL(i_anchor),                    &
-           knownj   = REAL(j_anchor),                    &
-           dx       = current_grid%dx)
-
-   CASE (PROJ_LATLON)
-
-      ! module_llxy requires angular increments for PROJ_LATLON,
-      ! not dx in metres. Derive them from neighbouring mass points.
-
-      IF (i_anchor < UBOUND(current_grid%xlong,1)) THEN
-
-         loninc = current_grid%xlong(i_anchor+1,j_anchor) &
-                - current_grid%xlong(i_anchor,j_anchor)
-
-      ELSE IF (i_anchor > LBOUND(current_grid%xlong,1)) THEN
-
-         loninc = current_grid%xlong(i_anchor,j_anchor)   &
-                - current_grid%xlong(i_anchor-1,j_anchor)
-
-      ELSE
-
-         CALL wrf_error_fatal(                           &
-              'Cannot determine longitude increment')
-
-      END IF
-
-      IF (j_anchor < UBOUND(current_grid%xlat,2)) THEN
-
-         latinc = current_grid%xlat(i_anchor,j_anchor+1)  &
-                - current_grid%xlat(i_anchor,j_anchor)
-
-      ELSE IF (j_anchor > LBOUND(current_grid%xlat,2)) THEN
-
-         latinc = current_grid%xlat(i_anchor,j_anchor)    &
-                - current_grid%xlat(i_anchor,j_anchor-1)
-
-      ELSE
-
-         CALL wrf_error_fatal(                           &
-              'Cannot determine latitude increment')
-
-      END IF
-
-      IF (ABS(latinc) < 1.0E-12 .OR.                    &
-          ABS(loninc) < 1.0E-12) THEN
-
-         WRITE(0,*) 'SPRAY ERROR: invalid lat/lon increments:', &
-                    latinc, loninc
-
-         CALL wrf_error_fatal(                           &
-              'Invalid increments for lat-lon spray mapping')
-
-      END IF
-
-      CALL map_set(                                      &
-           PROJ_LATLON, proj,                            &
-           lat1     = known_lat,                         &
-           lon1     = known_lon,                         &
-           knowni   = REAL(i_anchor),                    &
-           knownj   = REAL(j_anchor),                    &
-           latinc   = latinc,                            &
-           loninc   = loninc)
-
-   CASE DEFAULT
-
-      WRITE(0,*) 'SPRAY ERROR: unsupported map projection:', &
-                 config_flags%map_proj
-
-      CALL wrf_error_fatal(                              &
-           'locate_spray_sources: unsupported projection')
-
-   END SELECT
-
-   !---------------------------------------------------------------
-   ! Processor-owned bounds for the unstaggered mass grid.
-   !---------------------------------------------------------------
-
-   ips_src = current_grid%sp31
-   ipe_src = current_grid%ep31
-
-   jps_src = current_grid%sp33
-   jpe_src = current_grid%ep33
-
-   WRITE(0,*) '============================================'
-   WRITE(0,*) 'SPRAY DIAGNOSTICS: domain=', current_grid%id
-   WRITE(0,*) '============================================'
-   WRITE(0,*) 'Anchor point:'
-   WRITE(0,*) '  i_anchor, j_anchor =', i_anchor, j_anchor
-   WRITE(0,*) '  lat, lon =', known_lat, known_lon
-   WRITE(0,*) ''
-   WRITE(0,*) 'Domain bounds (global grid extent):'
-   WRITE(0,*) '  i: ', current_grid%sd31, ' to ', current_grid%ed31-1
-   WRITE(0,*) '  j: ', current_grid%sd33, ' to ', current_grid%ed33-1
-   WRITE(0,*) ''
-   WRITE(0,*) 'Patch bounds (this processor):'
-   WRITE(0,*) '  i: ', ips_src, ' to ', ipe_src
-   WRITE(0,*) '  j: ', jps_src, ' to ', jpe_src
-   WRITE(0,*) ''
-   WRITE(0,*) 'Spray sources to locate:'
-   WRITE(0,*) '============================================'
-
-   !---------------------------------------------------------------
-   ! Locate only sources assigned to the current domain.
-   !---------------------------------------------------------------
-
-   WRITE(0,*) 'DEBUG: locate_spray_sources called for domain', current_grid%id, &
-           ' on processor with patch i=', ips_src, ipe_src   !---------------------------------------------------------------
-
-   DO n = 1, num_spray_sources
-
-      IF (spray_source_domain(n) /= current_grid%id) CYCLE
-
-      spray_source_i(n)    = -999
-      spray_source_j(n)    = -999
-      spray_on_the_task(n) = .FALSE.
-
-      CALL latlon_to_ij(                                 &
-           proj,                                         &
-           spray_source_lat(n),                          &
-           spray_source_lon(n),                          &
-           i_val, j_val)
-
-      ! NaN check.
-      IF (i_val /= i_val .OR. j_val /= j_val) THEN
-
-         WRITE(0,*) 'SPRAY MAPPING RETURNED NAN:',       &
-                    ' source=', n,                       &
-                    ' domain=', current_grid%id,         &
-                    ' requested lat/lon=',               &
-                    spray_source_lat(n),                 &
-                    spray_source_lon(n),                 &
-                    ' anchor i/j=', i_anchor, j_anchor,  &
-                    ' anchor lat/lon=',                  &
-                    known_lat, known_lon,                &
-                    ' map_proj=', config_flags%map_proj, &
-                    ' dx=', current_grid%dx,             &
-                    ' truelat1/2=',                      &
-                    model_config_rec%truelat1(current_grid%id),               &
-                    model_config_rec%truelat2(current_grid%id),               &
-                    ' stand_lon=',                       &
-                    model_config_rec%stand_lon(current_grid%id)
-
-         CALL wrf_error_fatal(                           &
-              'locate_spray_sources: latlon_to_ij returned NaN')
-
-      END IF
-
-      isrc = NINT(i_val)
-      jsrc = NINT(j_val)
-
-      spray_source_i(n) = isrc
-      spray_source_j(n) = jsrc
-
-      ! Check against the physical unstaggered domain.
-      IF (isrc < current_grid%sd31 .OR.                  &
-          isrc > current_grid%ed31-1 .OR.                &
-          jsrc < current_grid%sd33 .OR.                  &
-          jsrc > current_grid%ed33-1) THEN
-
-         WRITE(0,*) 'SPRAY SOURCE OUTSIDE DOMAIN:',      &
-                    ' source=', n,                       &
-                    ' domain=', current_grid%id,         &
-                    ' requested lat/lon=',               &
-                    spray_source_lat(n),                 &
-                    spray_source_lon(n),                 &
-                    ' real i/j=', i_val, j_val,          &
-                    ' integer i/j=', isrc, jsrc,         &
-                    ' domain bounds=',                   &
-                    current_grid%sd31,                   &
-                    current_grid%ed31-1,                 &
-                    current_grid%sd33,                   &
-                    current_grid%ed33-1
-
-         CALL wrf_error_fatal(                           &
-              'Spray source lies outside assigned domain')
-
-      END IF
-
-      ! Only the task owning the rounded mass-grid cell emits it.
-      on_patch =                                         &
-           isrc >= ips_src .AND. isrc <= ipe_src .AND.   &
-           jsrc >= jps_src .AND. jsrc <= jpe_src
-
-      spray_on_the_task(n) = on_patch
-
-      WRITE(0,'(A,I3,A,I2)')                            &
-           'Source ', n, ' domain ', current_grid%id
-      WRITE(0,'(A,2F11.5)')                             &
-           '  Requested lat/lon: ', spray_source_lat(n), spray_source_lon(n)
-      WRITE(0,'(A,2F10.3)')                             &
-           '  Real i/j: ', i_val, j_val
-      WRITE(0,'(A,2I6)')                                &
-           '  Integer i/j: ', isrc, jsrc
-      WRITE(0,'(A,4I6)')                                &
-           '  Patch bounds (i,j): ', ips_src, ipe_src, jps_src, jpe_src
-      WRITE(0,'(A,L1)')                                 &
-           '  On this task? ', on_patch
-      WRITE(0,*) ''
-
-
-   END DO
-
-END SUBROUTINE locate_spray_sources
 
 SUBROUTINE add_spray_increment(                          &
      qscalar, is, grid_id, num_spray_sources, dt_model,  &
@@ -499,7 +121,7 @@ SUBROUTINE add_spray_increment(                          &
      its, ite, jts, jte, kts, kte )
 
    USE module_state_description, ONLY :                  &
-        P_QNSPRAER, P_QASPRAER, P_QMSPRAER
+        P_QNSPRAER, P_QASPRAER, P_QMSPRAER, P_QWSPRAER, P_QV
 
    IMPLICIT NONE
 
@@ -545,8 +167,18 @@ SUBROUTINE add_spray_increment(                          &
    REAL :: dry_air_mass
    REAL :: delta_q
 
+   REAL :: salinity
+   REAL :: water_rate
+   REAL :: vapour_rate
+   REAL :: delta_qw
+   REAL :: delta_qv
+
    REAL, PARAMETER :: pi_spray = 3.14159265358979323846
    REAL, PARAMETER :: gravity  = 9.80665
+
+   REAL, PARAMETER :: nfrac(3) = (/0.74929972, 0.23389356, 0.01680672/)
+   REAL, PARAMETER :: diams(3) = (/0.0156e-6, 0.123e-6, 0.398e-6/)
+   REAL, PARAMETER :: lnsig(3) = (/0.703, 0.534, 0.9/)
 
    IF (num_spray_sources <= 0) RETURN
 
@@ -616,13 +248,13 @@ SUBROUTINE add_spray_increment(                          &
 
       ! Total geometric surface area emitted per second:
       ! units m2 s-1.
-      adot = ndot * pi_spray * dg**2 *                   &
-             EXP(2.0 * ln_sigma_g**2)
+      adot = sum(ndot*nfrac * pi_spray * diams**2 *                   &
+             EXP(2.0 * lnsig**2))
 
       ! Total dry aerosol mass emitted per second:
       ! units kg s-1.
-      mdot = ndot * (pi_spray / 6.0) * rho_particle *    &
-             dg**3 * EXP(4.5 * ln_sigma_g**2)
+      mdot = sum(ndot*nfrac * (pi_spray / 6.0) * rho_particle *    &
+             diams**3 * EXP(4.5 * lnsig**2))
 
       IF (is == P_QNSPRAER) THEN
 
@@ -633,11 +265,41 @@ SUBROUTINE add_spray_increment(                          &
 
          ! m2 s-1
          source_rate = adot
-
       ELSE IF (is == P_QMSPRAER) THEN
 
          ! kg s-1
          source_rate = mdot
+
+      ELSE IF (is == P_QWSPRAER) THEN
+         !------------------------------------------------------------
+         ! Add spray-associated liquid water and emitted vapour once.
+         !
+         ! This block is tied to the dry-mass scalar branch so that it
+         ! is not executed again for number and area.
+         !------------------------------------------------------------
+ 
+         salinity = spray_particle_salinity(n)
+
+         IF (salinity <= 0.0 .OR. salinity >= 1.0) THEN
+            CALL wrf_error_fatal(                        &
+                 'spray_salinity must be between zero and one')
+         END IF
+
+         ! Salinity is dry-salt mass divided by total solution mass:
+         !
+         ! S = ms / (ms + mw)
+         !
+         ! Therefore:
+         !
+         ! mw = ms * (1-S)/S
+         source_rate = mdot * (1.0 - salinity) / salinity
+
+         WRITE(0,*) 'SPRAY WATER APPLY:',                &
+                    ' source=', n,                       &
+                    ' domain=', grid_id,                 &
+                    ' dry mass rate=', mdot,             &
+                    ' salinity=', salinity,              &
+                    ' liquid water rate=', source_rate
 
       ELSE
 
@@ -690,8 +352,8 @@ SUBROUTINE add_spray_increment(                          &
       ! QMSPRAER: kg kg-1
       !------------------------------------------------------------
 
-      delta_q = source_rate * dt_model / dry_air_mass
 
+      delta_q = source_rate * dt_model / dry_air_mass
       qscalar(i,k,j) = MAX(0.0,qscalar(i,k,j)) + delta_q
 
       ! Temporary conservation diagnostic for the number field.
@@ -710,6 +372,7 @@ SUBROUTINE add_spray_increment(                          &
 
       END IF
 
+
    END DO
 
 END SUBROUTINE add_spray_increment
@@ -724,6 +387,9 @@ END SUBROUTINE add_spray_increment
       spray_mode_diameter(:)      = 0.0
       spray_geometric_sigma(:)    = 1.0
       spray_particle_density(:)   = 2160.0
+      spray_particle_salinity(:)   = 0.035
+      spray_particle_molw(:)   = 0.05844
+      spray_particle_nu(:)   = 2.0
       spray_source_i(:)    = -999
       spray_source_j(:)    = -999
       spray_on_the_task(:)    = .false.
@@ -801,6 +467,9 @@ END SUBROUTINE add_spray_increment
      NAMELIST /physics/                 spray_mode_diameter                        
      NAMELIST /physics/                 spray_geometric_sigma                       
      NAMELIST /physics/                 spray_particle_density
+     NAMELIST /physics/                 spray_particle_salinity
+     NAMELIST /physics/                 spray_particle_molw
+     NAMELIST /physics/                 spray_particle_nu
 
      CALL initialise_spray_defaults()
 
