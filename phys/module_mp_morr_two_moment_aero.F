@@ -334,7 +334,7 @@ CONTAINS
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
       IMPLICIT NONE
-      SAVE !TWG 2017 add to avoid memory issues
+      !SAVE !TWG 2017 add to avoid memory issues
 
       INTEGER, INTENT(IN):: morr_rimed_ice ! RAS
 
@@ -801,7 +801,7 @@ SUBROUTINE MP_MORR_TWO_MOMENT_AERO(ITIMESTEP,                    &
 ! WVAR - STANDARD DEVIATION OF SUB-GRID VERTICAL VELOCITY (M/S)
 
    IMPLICIT NONE
-   SAVE !TWG  2017 add to avoid memeory issues
+   !SAVE !TWG  2017 add to avoid memeory issues
 
    INTEGER,      INTENT(IN   )    ::   ids, ide, jds, jde, kds, kde , &
                                        ims, ime, jms, jme, kms, kme , &
@@ -1030,6 +1030,7 @@ SUBROUTINE MP_MORR_TWO_MOMENT_AERO(ITIMESTEP,                    &
          iinum=0
       ENDDO
    ELSE
+
       DO k = kts, kte
 ! TWG 2016 comment this out temporarily
         ! nc1d(k)=0. ! temporary placeholder, set to constant in microphysics subroutine
@@ -1102,15 +1103,10 @@ SUBROUTINE MP_MORR_TWO_MOMENT_AERO(ITIMESTEP,                    &
         ! This is done before the main Morrison microphysics calculation so that
         ! Morrison receives thermodynamically adjusted T and QV.
         !-----------------------------------------------------------------------
-
         IF ( PRESENT(QMSPRAER) .AND. PRESENT(QWSPRAER) .and. spray_equilibrium ) THEN
-
            IF ( PRESENT(F_QMSPRAER) .AND. PRESENT(F_QWSPRAER) ) THEN
-
               IF (F_QMSPRAER .AND. F_QWSPRAER) THEN
-
                  DO k = kts, kte
-
                     IF (QMSPRAER(i,k,j) > 0.0 .OR.              &
                         QWSPRAER(i,k,j) > 0.0) THEN
 
@@ -1122,16 +1118,13 @@ SUBROUTINE MP_MORR_TWO_MOMENT_AERO(ITIMESTEP,                    &
                             QWSPRAER(i,k,j) )
 
                     END IF
-
                  END DO
-
               END IF
-
            END IF
-
         END IF
 
 !jdf  end do
+
 
       call MORR_TWO_MOMENT_MICRO(QC_TEND1D, QI_TEND1D, QNI_TEND1D, QR_TEND1D,            &
                                  NI_TEND1D, NS_TEND1D, NR_TEND1D,                        &
@@ -1256,7 +1249,6 @@ SUBROUTINE MP_MORR_TWO_MOMENT_AERO(ITIMESTEP,                    &
          endif
          ENDIF
 !+---+-----------------------------------------------------------------+
-
    end do
    end do   
 
@@ -1301,7 +1293,7 @@ END SUBROUTINE MP_MORR_TWO_MOMENT_AERO
 ! DECLARATIONS
 
       IMPLICIT NONE
-      SAVE !TWG 2017 add to avoid memeory issues
+      !SAVE !TWG 2017 add to avoid memeory issues
 
 !CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
 ! THESE VARIABLES BELOW MUST BE LINKED WITH THE MAIN MODEL.
@@ -5076,7 +5068,7 @@ END SUBROUTINE MP_MORR_TWO_MOMENT_AERO
 ! REPLACE GOFF-GRATCH WITH FASTER FORMULATION FROM FLATAU ET AL. 1992, TABLE 4 (RIGHT-HAND COLUMN)
 
       IMPLICIT NONE
-      SAVE !TWG 2017 add to avoid memory issues
+      !SAVE !TWG 2017 add to avoid memory issues
 
       REAL DUM
       REAL T
@@ -5504,7 +5496,7 @@ END SUBROUTINE MP_MORR_TWO_MOMENT_AERO
                       t1d, p1d, dBZ, kts, kte, ii, jj)
 
       IMPLICIT NONE
-      SAVE !TWG 2017 add to avoid memeory issues
+      !SAVE !TWG 2017 add to avoid memeory issues
 
 !..Sub arguments
       INTEGER, INTENT(IN):: kts, kte, ii, jj
@@ -5699,7 +5691,7 @@ END SUBROUTINE MP_MORR_TWO_MOMENT_AERO
 
       implicit none
 
-       save  ! sep6
+       !save  ! sep6
 
 !      input
 
@@ -5726,7 +5718,7 @@ END SUBROUTINE MP_MORR_TWO_MOMENT_AERO
 
       real p0     ! reference pressure (Pa)
       data p0/1013.25e2/
-      save p0
+      !save p0
 
       real :: volc(naer_cu) ! total aerosol volume  concentration (m3/m3)
       real tmass ! total aerosol mass concentration (g/cm3)
@@ -5853,7 +5845,7 @@ subroutine mdm_prescribed_maxsat(zeta,eta,nmode,smc,smax)
 !      2. Multiple aerosol types. J. Geophys. Res., 105, 6837-6844.
 
       implicit none
-       save ! sep6
+       !save ! sep6
       integer nmode ! number of modes
       real :: smc(:) ! critical supersaturation for number mode radius
       real zeta
@@ -5914,7 +5906,7 @@ subroutine mdm_prescribed_nucleati(wbar, tair, relhum, relhumi,  qc,  rhoair, &
 !----------------------------------------------------------------
 ! Input Arguments
 !
-     save   ! sep6
+     !save   ! sep6
   integer  naer_all
   real :: wbar                ! grid cell mean vertical velocity (m/s)
   real :: tair                ! temperature (K)
@@ -6084,7 +6076,7 @@ subroutine mdm_prescribed_hetero(T,ww,Ns,Nis,Nid)
     real A11,A12,A21,A22,B11,B12,B21,B22
     real A,B,C
 
-     save    ! spe6
+     !save    ! spe6
 !---------------------------------------------------------------------
 ! parameters
 
@@ -6110,7 +6102,7 @@ subroutine mdm_prescribed_hetero(T,ww,Ns,Nis,Nid)
 
  subroutine mdm_prescribed_hf(T,ww,RH,subgrid,Na,Ni)
 
-      save
+      !save
       real :: T, ww, RH, subgrid, Na
       real, intent(out) :: Ni
 
@@ -6196,7 +6188,7 @@ subroutine mdm_prescribed_hetero(T,ww,Ns,Nis,Nid)
 !  Polysvp returned in units of pa.
 !  T is input in units of K.
 !  type refers to saturation with respect to liquid (0) or ice (1)
-      save
+      !save
  
       real dum
 

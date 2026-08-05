@@ -200,7 +200,6 @@ integer::oops1,oops2
 #if (EM_CORE == 1)
       REAL, ALLOCATABLE :: aerotcu( :, :, :, :)   
       REAL, ALLOCATABLE :: aeroptcu( :, :, : )     
-      REAL, ALLOCATABLE :: aerovar( :,:,:)                      
 #endif
         INTEGER :: i_start,j_start, k_start, k_end
 
@@ -219,18 +218,9 @@ integer::oops1,oops2
                                 ipsy, ipey, jpsy, jpey, kpsy, kpey )
       its = ips ; ite = ipe ; jts = jps ; jte = jpe ; kts = kps ; kte = kpe
 
-        ALLOCATE( aerotcu(ims:ime,                       &
-                          1:grid%alevsiz_cu,             &
-                          jms:jme,                       &
-                          1:grid%no_src_types_cu) )
-
-        ALLOCATE( aeroptcu(ims:ime,                      &
-                           1:grid%alevsiz_cu,            &
-                           jms:jme) )
 
 
-        ALLOCATE( aerovar(ims:ime, kms:kme, jms:jme) )
-
+ 
       CALL model_to_grid_config_rec ( grid%id , model_config_rec , config_flags )
 
       !  Check flags from geogrid and the various model settings for any inconsistency.
@@ -4718,7 +4708,17 @@ endif
    IF ( (config_flags%mp_physics == MORR_TM_AERO) &
         .and.(config_flags%aercu_opt.GT. 0 ) ) THEN
         !aerocu=999.9
-      CALL aerosol_in_cu(grid%aeromcu,grid%alevsiz_cu,grid%num_months,grid%no_src_types_cu,grid%XLAT,grid%XLONG,grid%aeropcu,&
+
+        ALLOCATE( aerotcu(ims:ime,                       &
+                          1:grid%alevsiz_cu,             &
+                          jms:jme,                       &
+                          1:grid%no_src_types_cu) )
+
+        ALLOCATE( aeroptcu(ims:ime,                      &
+                           1:grid%alevsiz_cu,            &
+                           jms:jme) )
+
+        CALL aerosol_in_cu(grid%aeromcu,grid%alevsiz_cu,grid%num_months,grid%no_src_types_cu,grid%XLAT,grid%XLONG,grid%aeropcu,&
                      ids, ide, jds, jde, kds, kde,                  &
                      ims, ime, jms, jme, kms, kme,                  &
                      its, ite, jts, jte, kts, kte)
@@ -4749,9 +4749,9 @@ endif
         k_start = MAX(kts, kds)
         k_end   = MIN(kte, kde-1)
 
-		scalar(:,:,:,P_QMBGAER) = 0.0
-		scalar(:,:,:,P_QNBGAER) = 0.0
-		scalar(:,:,:,P_QABGAER) = 0.0
+	scalar(:,:,:,P_QMBGAER) = 0.0
+	scalar(:,:,:,P_QNBGAER) = 0.0
+	scalar(:,:,:,P_QABGAER) = 0.0
         DO j = j_start, j_end
            DO k = k_start, k_end
               DO i = i_start, i_end
@@ -5094,9 +5094,8 @@ endif
          END DO
       END IF
 
-        DEALLOCATE(aerotcu)
-        DEALLOCATE(aeroptcu)
-        DEALLOCATE(aerovar)
+      if (allocated(aerotcu)) DEALLOCATE(aerotcu)
+      if (allocated(aeroptcu)) DEALLOCATE(aeroptcu)
 
 #ifdef DM_PARALLEL
 # include "HALO_EM_INIT_1.inc"

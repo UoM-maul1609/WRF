@@ -95,19 +95,19 @@ MODULE module_configure
 
    INTEGER, SAVE :: spray_source_domain(MAX_SPRAY_SOURCES)
 
-   REAL, SAVE :: spray_source_lat(MAX_SPRAY_SOURCES)
-   REAL, SAVE :: spray_source_lon(MAX_SPRAY_SOURCES)
-   REAL, SAVE :: spray_number_rate(MAX_SPRAY_SOURCES)
-   REAL, SAVE :: spray_mode_diameter(MAX_SPRAY_SOURCES)
-   REAL, SAVE :: spray_geometric_sigma(MAX_SPRAY_SOURCES)
-   REAL, SAVE :: spray_particle_density(MAX_SPRAY_SOURCES)
-   REAL, SAVE :: spray_particle_salinity(MAX_SPRAY_SOURCES)
-   REAL, SAVE :: spray_particle_molw(MAX_SPRAY_SOURCES)
-   REAL, SAVE :: spray_particle_nu(MAX_SPRAY_SOURCES)
-   INTEGER, SAVE :: spray_source_i(MAX_SPRAY_SOURCES)
-   INTEGER, SAVE :: spray_source_j(MAX_SPRAY_SOURCES)
-   integer, save :: num_spray_sources1
-   LOGICAL, SAVE :: spray_on_the_task(MAX_SPRAY_SOURCES)
+   REAL, SAVE :: spray_source_lat(MAX_SPRAY_SOURCES) = 0.0
+   REAL, SAVE :: spray_source_lon(MAX_SPRAY_SOURCES) = 0.0
+   REAL, SAVE :: spray_number_rate(MAX_SPRAY_SOURCES) = 0.0
+   REAL, SAVE :: spray_mode_diameter(MAX_SPRAY_SOURCES) = 1e-6
+   REAL, SAVE :: spray_geometric_sigma(MAX_SPRAY_SOURCES) = 1.1
+   REAL, SAVE :: spray_particle_density(MAX_SPRAY_SOURCES) = 2160.0
+   REAL, SAVE :: spray_particle_salinity(MAX_SPRAY_SOURCES) = 0.035
+   REAL, SAVE :: spray_particle_molw(MAX_SPRAY_SOURCES) = 0.05844
+   REAL, SAVE :: spray_particle_nu(MAX_SPRAY_SOURCES) = 2.0
+   INTEGER, SAVE :: spray_source_i(MAX_SPRAY_SOURCES) = -999
+   INTEGER, SAVE :: spray_source_j(MAX_SPRAY_SOURCES) = -999
+   integer, save :: num_spray_sources1 = 0
+   LOGICAL, SAVE :: spray_on_the_task(MAX_SPRAY_SOURCES) = .false.
 
 CONTAINS
 
@@ -471,7 +471,7 @@ END SUBROUTINE add_spray_increment
      NAMELIST /physics/                 spray_particle_molw
      NAMELIST /physics/                 spray_particle_nu
 
-     CALL initialise_spray_defaults()
+     !CALL initialise_spray_defaults()
 
       OPEN ( UNIT   = nml_read_unit    ,      &
              FILE   = "namelist.input" ,      &
