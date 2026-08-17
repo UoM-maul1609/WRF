@@ -1746,6 +1746,10 @@ REAL, DIMENSION( ims:ime, kms:kme, jms:jme ),                        &
                      DZ=dz8w,                            &  !* !hm
                      HT=ht,                              &  !*
                      W=w                                 &  !*
+     ,MORR_ACC_COLLISIONS=config_flags%morr_acc_collisions &
+     ,MORR_SIP_MODE1=config_flags%morr_sip_mode1            &
+     ,MORR_SIP_MODE2=config_flags%morr_sip_mode2            &
+     ,MORR_ICE_ICE_COLLISIONS=config_flags%morr_ice_ice_collisions &
                     ,RAINNC=RAINNC                       &  !*
                     ,RAINNCV=RAINNCV                     &  !*
                     ,SNOWNC=SNOWNC                       &  !*

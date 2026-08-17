@@ -2422,6 +2422,10 @@ rconfig   logical  force_read_thompson   namelist,physics      1           .fals
 rconfig   logical  write_thompson_tables   namelist,physics     1           .true.
 rconfig   logical  write_thompson_mp38table   namelist,physics     1           .false.
 rconfig   integer     mp_physics          namelist,physics	max_domains    -1     irh       "mp_physics"            ""      ""
+rconfig   logical  morr_acc_collisions    namelist,physics	max_domains   .false. irh       "morr_acc_collisions"       ""      ""
+rconfig   logical  morr_sip_mode1         namelist,physics	max_domains   .false. irh       "morr_sip_mode1"            ""      ""
+rconfig   logical  morr_sip_mode2         namelist,physics	max_domains   .false. irh       "morr_sip_mode2"            ""      ""
+rconfig   logical  morr_ice_ice_collisions  namelist,physics	max_domains   .false. irh       "morr_ice_ice_collisions"   ""      ""
 #rconfig   integer     milbrandt_ccntype   namelist,physics      max_domains    0       rh       "milbrandt select maritime(1)/continental(2)"  ""      ""
 rconfig   real     nssl_cccn              namelist,physics      1            0.5e9    rh       "Base CCN concentration for NSSL microphysics"  ""      ""
 rconfig   real     nssl_alphah            namelist,physics      1             0       rh       "Graupel PSD shape paramter"  ""      ""

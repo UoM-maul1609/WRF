@@ -87,16 +87,37 @@
 MODULE MODULE_MP_MORR_TWO_MOMENT
    USE     module_wrf_error
    USE module_mp_radar
+   use iso_fortran_env, only : real64
 
 !  USE WRF PHYSICS CONSTANTS
   use module_model_constants, ONLY: CP, G, R => r_d, RV => r_v, EP_2
 
 !  USE module_state_description
-
    IMPLICIT NONE
+   private
+   public :: MORR_TWO_MOMENT_INIT
 
-   REAL, PARAMETER :: PI = 3.1415926535897932384626434
+
+   REAL, PARAMETER :: PI = 3.1415926535897932384626434, ttr=273.15
    REAL, PARAMETER :: xxx = 0.9189385332046727417803297
+
+   ! SIP params
+   real, parameter :: dtt=10e-6, gamma_liq=0.072, DEcrit=0.2,phi_mode2=0.35, &
+   	phi_phillips=3.5e-3
+   integer, parameter :: CB_II = 1
+   integer, parameter :: CB_IS = 2
+   integer, parameter :: CB_IG = 3
+   integer, parameter :: CB_SI = 4
+   integer, parameter :: CB_SS = 5
+   integer, parameter :: CB_SG = 6
+   integer, parameter :: CB_GG_SMALL = 7
+   integer, parameter :: CB_GG_HAIL  = 8
+
+   integer, parameter :: wp = real64
+   integer, parameter :: npar_arith=16,npar_arith2=8
+
+   real(wp), parameter :: oneoversix=1.0_wp/6.0_wp, oneovernine=1.0_wp/9.0_wp, &
+   	oneoverthree=1.0_wp/3.0_wp
 
    PUBLIC  ::  MP_MORR_TWO_MOMENT
    PUBLIC  ::  POLYSVP
@@ -238,9 +259,31 @@ MODULE MODULE_MP_MORR_TWO_MOMENT
      REAL, PRIVATE :: CONS11,CONS12,CONS13,CONS14,CONS15,CONS16,CONS17,CONS18,CONS19,CONS20
      REAL, PRIVATE :: CONS21,CONS22,CONS23,CONS24,CONS25,CONS26,CONS27,CONS28,CONS29,CONS30
      REAL, PRIVATE :: CONS31,CONS32,CONS33,CONS34,CONS35,CONS36,CONS37,CONS38,CONS39,CONS40
-     REAL, PRIVATE :: CONS41
+     REAL, PRIVATE :: CONS41, CRAIN, DRAIN, pthreshr, pthreshs, pthreshg, pthreshi
+     real(WP), private ::  probthresh=0.9999, t_send
 
+     real(wp), private :: xsav, mithresh,miupper, mrthresh, mrupper, &
+        c_1,c_2,d_1,d_2,lam_1,lam_2,n_1,n_2,alph_1,alph_2, a_1, b_1,a_2,b_2,rho_1,rho_2, &
+        e12,f_mode2, type1_send
+!$OMP THREADPRIVATE (xsav,mrthresh,mrupper,miupper,c_1,c_2,d_1,d_2,lam_1,lam_2)
+!$OMP THREADPRIVATE (n_1,n_2,alph_1,alph_2,a_1,b_1,a_2,b_2,rho_1,rho_2,e12,t_send,f_mode2)
+!$OMP THREADPRIVATE (type1_send)
 
+!
+     interface assert_eq
+	module procedure assert_eq2,assert_eq3,assert_eq4,assert_eqn
+     end interface
+!
+    interface gammainc
+        module procedure gammainc_scal, gammainc_vec
+    end interface
+
+    interface gcf
+        module procedure gcf_scal, gcf_vec
+    end interface
+    interface gser
+        module procedure gser_scal, gser_vec
+    end interface
 CONTAINS
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -523,7 +566,13 @@ SUBROUTINE MORR_TWO_MOMENT_INIT(morr_rimed_ice) ! RAS
          CONS39=PI*PI/36.*RHOW*BIMM
          CONS40=PI/6.*BIMM
          CONS41=PI*PI*ECR*RHOW
+         CRAIN = rhow/6.*pi ! pjc
+         DRAIN = 3.0 ! PJC
 
+         pthreshr=invgammainc(probthresh,1.0_wp)
+         pthreshs=invgammainc(probthresh,1.0_wp)
+         pthreshg=invgammainc(probthresh,1.0_wp)
+         pthreshi=invgammainc(probthresh,1.0_wp)
 !+---+-----------------------------------------------------------------+
 !..Set these variables needed for computing radar reflectivity.  These
 !.. get used within radar_init to create other variables used in the
@@ -563,6 +612,10 @@ END SUBROUTINE MORR_TWO_MOMENT_INIT
 SUBROUTINE MP_MORR_TWO_MOMENT(ITIMESTEP,                       &
                 TH, QV, QC, QR, QI, QS, QG, NI, NS, NR, NG, &
                 RHO, PII, P, DT_IN, DZ, HT, W,          &
+              MORR_ACC_COLLISIONS       &      ! PJC
+             ,MORR_SIP_MODE1            &      ! PJC
+             ,MORR_SIP_MODE2            &      ! PJC
+             ,MORR_ICE_ICE_COLLISIONS,  &      ! PJC
                 RAINNC, RAINNCV, SR,                    &
 		SNOWNC,SNOWNCV,GRAUPELNC,GRAUPELNCV,    & ! hm added 7/13/13
                 refl_10cm, diagflag, do_radar_ref,      & ! GT added for reflectivity calcs
@@ -721,6 +774,12 @@ SUBROUTINE MP_MORR_TWO_MOMENT(ITIMESTEP,                       &
    LOGICAL, OPTIONAL, INTENT(IN) :: diagflag
    INTEGER, OPTIONAL, INTENT(IN) :: do_radar_ref
 
+   ! PJC
+   LOGICAL, optional, INTENT(IN) :: MORR_ACC_COLLISIONS 
+   LOGICAL, optional, INTENT(IN) :: MORR_SIP_MODE1
+   LOGICAL, optional, INTENT(IN) :: MORR_SIP_MODE2
+   LOGICAL, optional, INTENT(IN) :: MORR_ICE_ICE_COLLISIONS
+
    LOGICAL :: has_wetscav
 
 ! below for wrf-chem
@@ -819,6 +878,9 @@ SUBROUTINE MP_MORR_TWO_MOMENT(ITIMESTEP,                       &
 
       call MORR_TWO_MOMENT_MICRO(QC_TEND1D, QI_TEND1D, QNI_TEND1D, QR_TEND1D,            &
        NI_TEND1D, NS_TEND1D, NR_TEND1D,                                                  &
+       MORR_ACC_COLLISIONS, &
+       MORR_SIP_MODE1, &
+       MORR_SIP_MODE2, &
        QC1D, QI1D, QS1D, QR1D,NI1D, NS1D, NR1D,                                          &
        T_TEND1D,QV_TEND1D, T1D, QV1D, P1D, DZ1D, W1D, WVAR1D,                   &
        PRECPRT1D,SNOWRT1D,                                                               &
@@ -927,7 +989,11 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
 !CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
 !CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
       SUBROUTINE MORR_TWO_MOMENT_MICRO(QC3DTEN,QI3DTEN,QNI3DTEN,QR3DTEN,         &
-       NI3DTEN,NS3DTEN,NR3DTEN,QC3D,QI3D,QNI3D,QR3D,NI3D,NS3D,NR3D,              &
+       NI3DTEN,NS3DTEN,NR3DTEN, &
+       MORR_ACC_COLLISIONS, &
+       MORR_SIP_MODE1, &
+       MORR_SIP_MODE2, &
+       QC3D,QI3D,QNI3D,QR3D,NI3D,NS3D,NR3D,              &
        T3DTEN,QV3DTEN,T3D,QV3D,PRES,DZQ,W3D,WVAR,PRECRT,SNOWRT,            &
        SNOWPRT,GRPLPRT,                & ! hm added 7/13/13
        EFFC,EFFI,EFFS,EFFR,DT,                                                   &
@@ -1039,6 +1105,7 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
 #if (WRF_CHEM == 1)
       LOGICAL, INTENT(IN) :: has_wetscav
 #endif
+        LOGICAL, INTENT(IN) :: MORR_ACC_COLLISIONS, MORR_SIP_MODE1, MORR_SIP_MODE2
 
 
 !.....................................................................................................
@@ -1132,6 +1199,9 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
      REAL, DIMENSION(KTS:KTE) ::  QMULTG    ! CHANGE Q DUE TO ICE MULT DROPLETS/GRAUPEL
      REAL, DIMENSION(KTS:KTE) ::  QMULTRG    ! CHANGE Q DUE TO ICE MULT RAIN/GRAUPEL
 
+     REAL, DIMENSION(KTS:KTE) ::  PMODE1, NMODE1
+     REAL, DIMENSION(KTS:KTE) ::  PMODE2, NMODE2
+
 ! TIME-VARYING ATMOSPHERIC PARAMETERS
 
      REAL, DIMENSION(KTS:KTE) ::   KAP   ! THERMAL CONDUCTIVITY OF AIR
@@ -1209,6 +1279,7 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
      REAL TAUS     ! PHASE REL. TIME (SEE M2005), SNOW
      REAL TAUG     ! PHASE REL. TIME (SEE M2005), GRAUPEL
      REAL DUMACT,DUM3
+     real(wp) :: dummy_calc
 
 ! COUNTING/INDEX VARIABLES
 
@@ -1726,12 +1797,35 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
 !                  2./(LAMS(K)**2*LAMR(K)**2)+                  &
 !                  0.5/(LAMS(K)*LAMR(K)**3)))
 
-            PRACS(K) = CONS41*(((1.2*UMR-0.95*UMS)**2+                   &
+            if (.not.MORR_ACC_COLLISIONS) then
+               PRACS(K) = CONS41*(((1.2*UMR-0.95*UMS)**2+                   &
                   0.08*UMS*UMR)**0.5*RHO(K)*                      &
                   N0RR(K)*N0S(K)/LAMR(K)**3*                              &
                   (5./(LAMR(K)**3*LAMS(K))+                    &
                   2./(LAMR(K)**2*LAMS(K)**2)+                  &				 
                   0.5/(LAMR(k)*LAMS(k)**3)))
+            else
+               mrthresh=crain*1.e-6_wp**drain
+               mrupper=crain*(pthreshr/LAMR(k))**drain
+               mithresh=cs*1.e-6_wp**ds
+               miupper=cs*(pthreshs/LAMS(k))**ds
+               if((mrupper.gt.mrthresh).and.(miupper.gt.mithresh)) then
+                       c_1=crain;       c_2=CS
+                       d_1=drain;       d_2=ds
+                       a_1=arn(k);      a_2=asn(k)
+                       b_1=br;          b_2=bs
+                       alph_1=0.;       alph_2=0.
+                       e12=ecr
+                       lam_1=LAMR(k);   lam_2=LAMS(k)
+                       n_1=n0rr(k);     n_2=n0s(k)
+                       !rho_1=dum;       rho_2=dum
+
+                       call quad2d_qgaus(dintegral_coll_mass,limit1_coll, limit2_coll, &
+				        mrthresh, mrupper, dummy_calc)
+                       PRACS(K)=real(dummy_calc)* RHO(K)
+                endif
+            endif
+
 
 ! fix 053011, npracs no longer subtracted from snow
 !            NPRACS(K) = CONS32*RHO(K)*(1.7*(UNR-UNS)**2+            &
@@ -1762,22 +1856,65 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
             UNR=MIN(UNR,9.1*dum)
 
 ! PRACG IS MIXING RATIO OF RAIN PER SEC COLLECTED BY GRAUPEL/HAIL
-            PRACG(K) = CONS41*(((1.2*UMR-0.95*UMG)**2+                   &
+            if (.not.MORR_ACC_COLLISIONS) then
+               PRACG(K) = CONS41*(((1.2*UMR-0.95*UMG)**2+                   &
                   0.08*UMG*UMR)**0.5*RHO(K)*                      &
                   N0RR(K)*N0G(K)/LAMR(K)**3*                              &
                   (5./(LAMR(K)**3*LAMG(K))+                    &
                   2./(LAMR(K)**2*LAMG(K)**2)+				   &
 				  0.5/(LAMR(k)*LAMG(k)**3)))
+            else
+               mrthresh=crain*1.e-6_wp**drain
+               mrupper=crain*(pthreshr/LAMR(k))**drain
+               mithresh=cg*1.e-6_wp**dg
+               miupper=cg*(pthreshg/LAMG(k))**dg
+               if((mrupper.gt.mrthresh).and.(miupper.gt.mithresh)) then
+                       c_1=crain;       c_2=CG
+                       d_1=drain;       d_2=dg
+                       a_1=arn(k);      a_2=agn(k)
+                       b_1=br;          b_2=bg
+                       alph_1=0.;       alph_2=0.
+                       e12=ecr
+                       lam_1=LAMR(k);   lam_2=LAMG(k)
+                       n_1=n0rr(k);     n_2=n0g(k)
+         
+                       call quad2d_qgaus(dintegral_coll_mass,limit1_coll, limit2_coll, &
+				        mrthresh, mrupper, dummy_calc)
+                       PRACG(K)=real(dummy_calc)* RHO(K)
+                endif
+            endif
 
 ! ASSUME 1 MM DROPS ARE SHED, GET NUMBER SHED PER SEC
 
             DUM = PRACG(K)/5.2E-7
 
-            NPRACG(K) = CONS32*RHO(K)*(1.7*(UNR-UNG)**2+            &
+            if (.not.MORR_ACC_COLLISIONS) then
+               NPRACG(K) = CONS32*RHO(K)*(1.7*(UNR-UNG)**2+            &
                 0.3*UNR*UNG)**0.5*N0RR(K)*N0G(K)*              &
                 (1./(LAMR(K)**3*LAMG(K))+                      &
                  1./(LAMR(K)**2*LAMG(K)**2)+                   &
                  1./(LAMR(K)*LAMG(K)**3))
+            else
+               mrthresh=crain*1.e-6_wp**drain
+               mrupper=crain*(pthreshr/LAMR(k))**drain
+               mithresh=cg*1.e-6_wp**dg
+               miupper=cg*(pthreshg/LAMG(k))**dg
+               if((mrupper.gt.mrthresh).and.(miupper.gt.mithresh)) then
+                       c_1=crain;       c_2=CG
+                       d_1=drain;       d_2=dg
+                       a_1=arn(k);      a_2=agn(k)
+                       b_1=br;          b_2=bg
+                       alph_1=0.;       alph_2=0.
+                       e12=ecr
+                       lam_1=LAMR(k);   lam_2=LAMG(k)
+                       n_1=n0rr(k);     n_2=n0g(k)
+         			   ! mrthresh, mrupper is limit for rain, limit1_coll, limit2_coll 
+         			   ! for graupel
+                       call quad2d_qgaus(dintegral_coll_num,limit1_coll, limit2_coll, &
+				        mrthresh, mrupper, dummy_calc)
+                       NPRACG(K)=real(dummy_calc) * RHO(K)
+                endif
+            endif
 
 ! hm 7/15/13, remove limit so that the number of collected drops can smaller than 
 ! number of shed drops
@@ -2329,6 +2466,10 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
 	    NSCNG(K) = 0.
  	    NGRACS(K) = 0.
 	    NSUBG(K) = 0.
+            PMODE1(k) = 0.      ! going to ice 
+            NMODE1(k) = 0.      ! going to ice 
+            PMODE2(k) = 0.      ! going to ice 
+            NMODE2(k) = 0.      ! going to ice 
 
 !CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
 ! CALCULATION OF MICROPHYSICAL PROCESS RATES
@@ -2429,13 +2570,33 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
 
 ! SNOW AGGREGATION FROM PASSARELLI, 1978, USED BY REISNER, 1998
 ! THIS IS HARD-WIRED FOR BS = 0.4 FOR NOW
+        if(.not.MORR_ACC_COLLISIONS) then
+               IF (QNI3D(K).GE.1.E-8) THEN
+                     NSAGG(K) = CONS15*ASN(K)*RHO(K)**            &
+                    ((2.+BS)/3.)*QNI3D(K)**((2.+BS)/3.)*                  &
+                    (NS3D(K)*RHO(K))**((4.-BS)/3.)/                       &
+                    (RHO(K))
+               END IF
+        else
+               mrthresh=cs*1.e-6_wp**ds
+               mrupper=cs*(pthreshs/LAMS(k))**ds
+               mithresh=mrthresh
+               miupper=mrupper
+               if(mrupper.gt.mrthresh) then
+                       c_1=cs;          c_2=CS
+                       d_1=DS;          d_2=dS
+                       a_1=asn(k);      a_2=asn(k)
+                       b_1=bs;          b_2=bs
+                       alph_1=0.;       alph_2=0.
+                       e12=eii
+                       lam_1=LAMS(k);   lam_2=LAMS(k)
+                       n_1=n0s(k);      n_2=n0s(k)
 
-         IF (QNI3D(K).GE.1.E-8) THEN
-             NSAGG(K) = CONS15*ASN(K)*RHO(K)**            &
-            ((2.+BS)/3.)*QNI3D(K)**((2.+BS)/3.)*                  &
-            (NS3D(K)*RHO(K))**((4.-BS)/3.)/                       &
-            (RHO(K))
-         END IF
+                       call quad2d_qgaus(dintegral_coll_num,limit1_coll, limit2_coll, &
+				        mrthresh, mrupper, dummy_calc)
+                       NSAGG(K)=-0.5*real(dummy_calc)* RHO(K)
+                endif
+        endif
 
 !.......................................................................
 ! ACCRETION OF CLOUD DROPLETS ONTO SNOW/GRAUPEL
@@ -2510,19 +2671,42 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
             UNS=MIN(UNS,1.2*dum)
             UMR=MIN(UMR,9.1*dum)
             UNR=MIN(UNR,9.1*dum)
-
-            PRACS(K) = CONS41*(((1.2*UMR-0.95*UMS)**2+                   &
+            if(.not.MORR_ACC_COLLISIONS) then
+               PRACS(K) = CONS41*(((1.2*UMR-0.95*UMS)**2+                   &
                   0.08*UMS*UMR)**0.5*RHO(K)*                      &
                   N0RR(K)*N0S(K)/LAMR(K)**3*                              &
                   (5./(LAMR(K)**3*LAMS(K))+                    &
                   2./(LAMR(K)**2*LAMS(K)**2)+                  &				 
                   0.5/(LAMR(k)*LAMS(k)**3)))
 
-            NPRACS(K) = CONS32*RHO(K)*(1.7*(UNR-UNS)**2+            &
+               NPRACS(K) = CONS32*RHO(K)*(1.7*(UNR-UNS)**2+            &
                 0.3*UNR*UNS)**0.5*N0RR(K)*N0S(K)*              &
                 (1./(LAMR(K)**3*LAMS(K))+                      &
                  1./(LAMR(K)**2*LAMS(K)**2)+                   &
                  1./(LAMR(K)*LAMS(K)**3))
+            else
+               mrthresh=crain*1.e-6_wp**drain
+               mrupper=crain*(pthreshr/LAMR(k))**drain
+               mithresh=cs*1.e-6_wp**ds
+               miupper=cs*(pthreshs/LAMS(k))**ds
+               if((mrupper.gt.mrthresh).and.(miupper.gt.mithresh)) then
+                       c_1=crain;       c_2=CS
+                       d_1=Drain;       d_2=dS
+                       a_1=arn(k);      a_2=asn(k)
+                       b_1=br;          b_2=bs
+                       alph_1=0.;       alph_2=0.
+                       e12=ecr
+                       lam_1=LAMR(k);   lam_2=LAMS(k)
+                       n_1=n0rr(k);     n_2=n0s(k)
+         
+                       call quad2d_qgaus(dintegral_coll_mass,limit1_coll, limit2_coll, &
+				        mrthresh, mrupper, dummy_calc)
+                       PRACS(K)=real(dummy_calc)* RHO(K)
+                       call quad2d_qgaus(dintegral_coll_num,limit1_coll, limit2_coll, &
+				        mrthresh, mrupper, dummy_calc)
+                       NPRACS(K)=real(dummy_calc)* RHO(K)
+                endif
+            endif
 
 ! MAKE SURE PRACS DOESN'T EXCEED TOTAL RAIN MIXING RATIO
 ! AS THIS MAY OTHERWISE RESULT IN TOO MUCH TRANSFER OF WATER DURING
@@ -2565,20 +2749,42 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
             UNG=MIN(UNG,20.*dum)
             UMR=MIN(UMR,9.1*dum)
             UNR=MIN(UNR,9.1*dum)
-
-            PRACG(K) = CONS41*(((1.2*UMR-0.95*UMG)**2+                   &
+            if(.not.morr_acc_collisions) then
+               PRACG(K) = CONS41*(((1.2*UMR-0.95*UMG)**2+                   &
                   0.08*UMG*UMR)**0.5*RHO(K)*                      &
                   N0RR(K)*N0G(K)/LAMR(K)**3*                              &
                   (5./(LAMR(K)**3*LAMG(K))+                    &
                   2./(LAMR(K)**2*LAMG(K)**2)+				   &
 				  0.5/(LAMR(k)*LAMG(k)**3)))
 
-            NPRACG(K) = CONS32*RHO(K)*(1.7*(UNR-UNG)**2+            &
+               NPRACG(K) = CONS32*RHO(K)*(1.7*(UNR-UNG)**2+            &
                 0.3*UNR*UNG)**0.5*N0RR(K)*N0G(K)*              &
                 (1./(LAMR(K)**3*LAMG(K))+                      &
                  1./(LAMR(K)**2*LAMG(K)**2)+                   &
                  1./(LAMR(K)*LAMG(K)**3))
-
+            else
+               mrthresh=crain*1.e-6_wp**drain
+               mrupper=crain*(pthreshr/LAMR(k))**drain
+               mithresh=cg*1.e-6_wp**dg
+               miupper=cg*(pthreshg/LAMG(k))**dg
+               if((mrupper.gt.mrthresh).and.(miupper.gt.mithresh)) then
+                       c_1=crain;       c_2=CG
+                       d_1=Drain;       d_2=dG
+                       a_1=arn(k);      a_2=agn(k)
+                       b_1=br;          b_2=bg
+                       alph_1=0.;       alph_2=0.
+                       e12=ecr
+                       lam_1=LAMR(k);   lam_2=LAMG(k)
+                       n_1=n0rr(k);     n_2=n0g(k)
+         
+                       call quad2d_qgaus(dintegral_coll_mass,limit1_coll, limit2_coll, &
+				        mrthresh, mrupper, dummy_calc)
+                       PRACG(K)=real(dummy_calc)* RHO(K)
+                       call quad2d_qgaus(dintegral_coll_num,limit1_coll, limit2_coll, &
+				        mrthresh, mrupper, dummy_calc)
+                       NPRACG(K)=real(dummy_calc)* RHO(K)
+                endif
+            endif
 ! MAKE SURE PRACG DOESN'T EXCEED TOTAL RAIN MIXING RATIO
 ! AS THIS MAY OTHERWISE RESULT IN TOO MUCH TRANSFER OF WATER DURING
 ! RIME-SPLINTERING
@@ -2712,6 +2918,155 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
             END IF
 !         END IF
 
+! PJC mode 1 collisions, mode 2 collisions, ice-ice collisions
+
+
+
+
+         IF (QR3D(K).GE.0.1E-8.and.MORR_SIP_MODE1) THEN
+            
+            IF (QI3D(K).GE.0.1E-8) THEN 
+               mrthresh=crain*1.e-6_wp**drain
+               mrupper=crain*(pthreshr/LAMR(k))**drain
+               mithresh=ci*1.e-6_wp**di
+               miupper=ci*(pthreshi/LAMI(k))**di
+               if((mrupper.gt.mrthresh).and.(miupper.gt.mithresh)) then
+                       c_1=crain;       c_2=CI
+                       d_1=Drain;       d_2=di
+                       a_1=arn(k);      a_2=ain(k)
+                       b_1=br;          b_2=bI
+                       alph_1=0.;       alph_2=0.
+                       e12=ecr
+                       lam_1=LAMR(k);   lam_2=LAMI(k)
+                       n_1=n0rr(k);     n_2=n0i(k)
+                       
+                       call quad2d_qgaus(dintegral_mode1,limit1_mode1, limit2_mode1, &
+				        mrthresh, mrupper, dummy_calc)
+                       NMODE1(K)=NMODE1(K)+real(dummy_calc)* RHO(K)
+                       call quad2d_qgaus(dintegral_mode1_mass,limit1_mode1, limit2_mode1, &
+				        mrthresh, mrupper, dummy_calc)
+                       PMODE1(K)=PMODE1(K)+real(dummy_calc)* RHO(K)
+                endif
+            endif
+            
+            IF (QNI3D(K).GE.0.1E-8) THEN 
+               mrthresh=crain*1.e-6_wp**drain
+               mrupper=crain*(pthreshr/LAMR(k))**drain
+               mithresh=cs*1.e-6_wp**ds
+               miupper=cs*(pthreshs/LAMS(k))**ds
+               if((mrupper.gt.mrthresh).and.(miupper.gt.mithresh)) then
+                       c_1=crain;       c_2=CS
+                       d_1=Drain;       d_2=ds
+                       a_1=arn(k);      a_2=asn(k)
+                       b_1=br;          b_2=bS
+                       alph_1=0.;       alph_2=0.
+                       e12=ecr
+                       lam_1=LAMR(k);   lam_2=LAMS(k)
+                       n_1=n0rr(k);     n_2=n0s(k)
+                       
+                       call quad2d_qgaus(dintegral_mode1,limit1_mode1, limit2_mode1, &
+				        mrthresh, mrupper, dummy_calc)
+                       NMODE1(K)=NMODE1(K)+real(dummy_calc)* RHO(K)
+                       call quad2d_qgaus(dintegral_mode1_mass,limit1_mode1, limit2_mode1, &
+				        mrthresh, mrupper, dummy_calc)
+                       PMODE1(K)=PMODE1(K)+real(dummy_calc)* RHO(K)
+                endif
+            endif
+            
+            IF (QG3D(K).GE.0.1E-8) THEN 
+               mrthresh=crain*1.e-6_wp**drain
+               mrupper=crain*(pthreshr/LAMR(k))**drain
+               mithresh=cg*1.e-6_wp**dg
+               miupper=cg*(pthreshg/LAMG(k))**dg
+               if((mrupper.gt.mrthresh).and.(miupper.gt.mithresh)) then
+                       c_1=crain;       c_2=CG
+                       d_1=Drain;       d_2=dg
+                       a_1=arn(k);      a_2=agn(k)
+                       b_1=br;          b_2=bG
+                       alph_1=0.;       alph_2=0.
+                       e12=ecr
+                       lam_1=LAMR(k);   lam_2=LAMG(k)
+                       n_1=n0rr(k);     n_2=n0g(k)
+                       
+                       call quad2d_qgaus(dintegral_mode1,limit1_mode1, limit2_mode1, &
+				        mrthresh, mrupper, dummy_calc)
+                       NMODE1(K)=NMODE1(K)+real(dummy_calc)* RHO(K)
+                       call quad2d_qgaus(dintegral_mode1_mass,limit1_mode1, limit2_mode1, &
+				        mrthresh, mrupper, dummy_calc)
+                       PMODE1(K)=PMODE1(K)+real(dummy_calc)* RHO(K)
+                endif
+            endif
+         endif
+         
+         IF (QR3D(K).GE.0.1E-8.and.MORR_SIP_MODE2) THEN
+            f_mode2=min(-CPW*(T3D(K)-ttr)/XLF(K),1.0_wp)
+            IF (QI3D(K).GE.0.1E-8) THEN 
+               mrthresh=crain*1.e-6_wp**drain
+               mrupper=crain*(pthreshr/LAMR(k))**drain
+               mithresh=ci*1.e-6_wp**di
+               miupper=ci*(pthreshi/LAMI(k))**di
+               if((mrupper.gt.mrthresh).and.(miupper.gt.mithresh)) then
+                       c_1=crain;       c_2=CI
+                       d_1=Drain;       d_2=di
+                       a_1=arn(k);      a_2=ain(k)
+                       b_1=br;          b_2=bI
+                       alph_1=0.;       alph_2=0.
+                       e12=ecr
+                       lam_1=LAMR(k);   lam_2=LAMI(k)
+                       n_1=n0rr(k);     n_2=n0i(k)
+                       
+                       call quad2d_qgaus(dintegral_mode2,limit1_mode2, limit2_mode2, &
+				        mrthresh, mrupper, dummy_calc)
+                       NMODE2(K)=real(dummy_calc)* RHO(K)
+                       PMODE2(K)=real(dummy_calc)* RHO(K) *MI0
+                endif
+            endif
+            
+            IF (QNI3D(K).GE.0.1E-8) THEN 
+               mrthresh=crain*1.e-6_wp**drain
+               mrupper=crain*(pthreshr/LAMR(k))**drain
+               mithresh=cs*1.e-6_wp**ds
+               miupper=cs*(pthreshs/LAMS(k))**ds
+               if((mrupper.gt.mrthresh).and.(miupper.gt.mithresh)) then
+                       c_1=crain;       c_2=CS
+                       d_1=Drain;       d_2=ds
+                       a_1=arn(k);      a_2=asn(k)
+                       b_1=br;          b_2=bS
+                       alph_1=0.;       alph_2=0.
+                       e12=ecr
+                       lam_1=LAMR(k);   lam_2=LAMS(k)
+                       n_1=n0rr(k);     n_2=n0s(k)
+                       
+                       call quad2d_qgaus(dintegral_mode2,limit1_mode2, limit2_mode2, &
+				        mrthresh, mrupper, dummy_calc)
+                       NMODE2(K)=NMODE2(K)+real(dummy_calc)* RHO(K)
+                       PMODE2(K)=PMODE2(K)+real(dummy_calc)* RHO(K)*MI0
+                endif
+            endif
+            
+            IF (QG3D(K).GE.0.1E-8) THEN 
+               mrthresh=crain*1.e-6_wp**drain
+               mrupper=crain*(pthreshr/LAMR(k))**drain
+               mithresh=cg*1.e-6_wp**dg
+               miupper=cg*(pthreshg/LAMG(k))**dg
+               if((mrupper.gt.mrthresh).and.(miupper.gt.mithresh)) then
+                       c_1=crain;       c_2=CG
+                       d_1=Drain;       d_2=dg
+                       a_1=arn(k);      a_2=agn(k)
+                       b_1=br;          b_2=bG
+                       alph_1=0.;       alph_2=0.
+                       e12=ecr
+                       lam_1=LAMR(k);   lam_2=LAMG(k)
+                       n_1=n0rr(k);     n_2=n0g(k)
+                       
+                       call quad2d_qgaus(dintegral_mode2,limit1_mode2, limit2_mode2, &
+				        mrthresh, mrupper, dummy_calc)
+                       NMODE2(K)=NMODE2(K)+real(dummy_calc)* RHO(K)
+                       PMODE2(K)=PMODE2(K)+real(dummy_calc)* RHO(K)*MI0
+                endif
+            endif
+         endif
+
 !........................................................................
 ! CONVERSION OF RIMED CLOUD WATER ONTO SNOW TO GRAUPEL/HAIL
 
@@ -2784,6 +3139,18 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
 
 ! PREVENT DIVERGENCE BETWEEN MIXING RATIO AND NUMBER CONC
             NNUCCR(K) = MIN(NNUCCR(K),NR3D(K)/DT)
+            if(MORR_SIP_MODE1.and.MNUCCR(K) > 0. .and. NNUCCR(K) > 0.) then
+                mrthresh=1.e-6_wp
+                mrupper=(pthreshr/LAMR(k))
+                t_send=T3D(K)
+                lam_1=(NNUCCR(K)/MNUCCR(K)*crain*6.0)**(1.0/drain)   
+                n_1=NNUCCR(K)*lam_1
+                NMODE1(K)=NMODE1(K)+romb(integral_m1,mrthresh,mrupper)
+                dummy_calc=romb(integral_m1m,mrthresh,mrupper)
+                dummy_calc = MIN(dummy_calc, REAL(MNUCCR(K),wp))
+                MNUCCR(K)=MNUCCR(K)-dummy_calc
+                PMODE1(K)=PMODE1(K)+dummy_calc
+            endif
 
          END IF
 
@@ -3124,12 +3491,13 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
 ! CONSERVATION OF QR
 
       DUM=((PRACS(K)-PRE(K))+(QMULTR(K)+QMULTRG(K)-PRC(K))+(MNUCCR(K)-PRA(K))+ &
-             PIACR(K)+PIACRS(K)+PGRACS(K)+PRACG(K))*DT
+             PIACR(K)+PIACRS(K)+PGRACS(K)+PRACG(K)+PMODE1(K)+PMODE2(K))*DT
 
       IF (DUM.GT.QR3D(K).AND.QR3D(K).GE.QSMALL) THEN
 
         RATIO = (QR3D(K)/DT+PRC(K)+PRA(K))/ &
-             (-PRE(K)+QMULTR(K)+QMULTRG(K)+PRACS(K)+MNUCCR(K)+PIACR(K)+PIACRS(K)+PGRACS(K)+PRACG(K))
+             (-PRE(K)+QMULTR(K)+QMULTRG(K)+PRACS(K)+MNUCCR(K)+PIACR(K)+PIACRS(K)+PGRACS(K)+PRACG(K)+ &
+             PMODE1(K)+PMODE2(K))
 
         PRE(K) = PRE(K)*RATIO
         PRACS(K) = PRACS(K)*RATIO
@@ -3140,6 +3508,10 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
         PIACRS(K) = PIACRS(K)*RATIO
         PGRACS(K) = PGRACS(K)*RATIO
         PRACG(K) = PRACG(K)*RATIO
+        PMODE1(K) = PMODE1(K)*RATIO
+        NMODE1(K) = NMODE1(K)*RATIO
+        PMODE2(K) = PMODE2(K)*RATIO
+        NMODE2(K) = NMODE2(K)*RATIO
 
         END IF
 
@@ -3198,17 +3570,19 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
                 MNUCCD(K)+EPRD(K)+EPRDS(K)+PRDG(K)+EPRDG(K))*XXLS(K)+         &
                (PSACWS(K)+PSACWI(K)+MNUCCC(K)+MNUCCR(K)+                      &
                 QMULTS(K)+QMULTG(K)+QMULTR(K)+QMULTRG(K)+PRACS(K) &
-                +PSACWG(K)+PRACG(K)+PGSACW(K)+PGRACS(K)+PIACR(K)+PIACRS(K))*XLF(K))/CPM(K)
+                +PSACWG(K)+PRACG(K)+PGSACW(K)+PGRACS(K)+PIACR(K)+PIACRS(K)+ &
+                PMODE1(K)+PMODE2(K))*XLF(K))/CPM(K)
 
       QC3DTEN(K) = QC3DTEN(K)+                                      &
                  (-PRA(K)-PRC(K)-MNUCCC(K)+PCC(K)-                  &
                   PSACWS(K)-PSACWI(K)-QMULTS(K)-QMULTG(K)-PSACWG(K)-PGSACW(K))
       QI3DTEN(K) = QI3DTEN(K)+                                      &
          (PRD(K)+EPRD(K)+PSACWI(K)+MNUCCC(K)-PRCI(K)-                                 &
-                  PRAI(K)+QMULTS(K)+QMULTG(K)+QMULTR(K)+QMULTRG(K)+MNUCCD(K)-PRACI(K)-PRACIS(K))
+                  PRAI(K)+QMULTS(K)+QMULTG(K)+QMULTR(K)+QMULTRG(K)+MNUCCD(K)-PRACI(K)-PRACIS(K)+&
+                +PMODE1(K)+PMODE2(K))
       QR3DTEN(K) = QR3DTEN(K)+                                      &
                  (PRE(K)+PRA(K)+PRC(K)-PRACS(K)-MNUCCR(K)-QMULTR(K)-QMULTRG(K) &
-             -PIACR(K)-PIACRS(K)-PRACG(K)-PGRACS(K))
+             -PIACR(K)-PIACRS(K)-PRACG(K)-PGRACS(K)-PMODE1(K)-PMODE2(K))
 
       IF (IGRAUP.EQ.0) THEN
 
@@ -3233,7 +3607,7 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
 
       NI3DTEN(K) = NI3DTEN(K)+                                      &
        (NNUCCC(K)-NPRCI(K)-NPRAI(K)+NMULTS(K)+NMULTG(K)+NMULTR(K)+NMULTRG(K)+ &
-               NNUCCD(K)-NIACR(K)-NIACRS(K))
+               NNUCCD(K)-NIACR(K)-NIACRS(K)+NMODE1(K)+NMODE2(K))
 
       NR3DTEN(K) = NR3DTEN(K)+(NPRC1(K)-NPRACS(K)-NNUCCR(K)      &
                    +NRAGG(K)-NIACR(K)-NIACRS(K)-NPRACG(K)-NGRACS(K))
@@ -4675,6 +5049,1032 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
       end subroutine refl10cm_hm
 
 !+---+-----------------------------------------------------------------+
+
+!  
+    function limit1_coll(x)
+        implicit none
+        real(wp), intent(in) :: x
+        real(wp) :: limit1_coll
+        limit1_coll=mithresh
+    end function limit1_coll
+
+    function limit2_coll(x)
+        implicit none
+        real(wp), intent(in) :: x
+        real(wp) :: limit2_coll
+        limit2_coll=miupper
+    end function limit2_coll
+!
+    function limit1_mode1(x)
+        implicit none
+        real(wp), intent(in) :: x
+        real(wp) :: limit1_mode1
+        limit1_mode1=mithresh
+    end function limit1_mode1
+
+    function limit2_mode1(x)
+        implicit none
+        real(wp), intent(in) :: x
+        real(wp) :: limit2_mode1
+        limit2_mode1=x
+    end function limit2_mode1
+!
+    function limit1_mode2(x)
+        implicit none
+        real(wp), intent(in) :: x
+        real(wp) :: limit1_mode2
+        limit1_mode2=x
+    end function limit1_mode2
+
+    function limit2_mode2(x)
+        implicit none
+        real(wp), intent(in) :: x
+        real(wp) :: limit2_mode2
+        limit2_mode2=miupper
+    end function limit2_mode2
+!  
+    function limit1_collisional(x)
+        implicit none
+        real(wp), intent(in) :: x
+        real(wp) :: limit1_collisional
+        limit1_collisional=1.e-6_wp
+    end function limit1_collisional
+    
+	!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	! quad2d_qgaus for doing a double integral
+	!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	subroutine quad2d_qgaus(func1,y1,y2,x1,x2,ss)
+	implicit none
+	real(wp), intent(in) :: x1,x2
+	real(wp), intent(out) :: ss
+	
+	interface
+		function func1(x,y)
+                import :: wp
+		implicit none
+		real(wp), intent(in) :: x
+		real(wp), dimension(:), intent(in) :: y
+		real(wp), dimension(size(y)) :: func1
+		end function func1
+!
+
+		function y1(x)
+                import :: wp
+                implicit none
+		real(wp), intent(in) :: x
+		real(wp) :: y1
+		end function y1
+!
+		function y2(x)
+                import :: wp
+                implicit none
+		real(wp), intent(in) :: x
+		real(wp) :: y2
+		end function y2
+
+    end interface
+	
+	! sum up the function h, from x1 to x2
+	ss=qgaus(h,x1,x2)
+	
+    ! internal routine
+    contains
+    	 ! f= function at (x,y)
+         function f(y)
+         implicit none
+         real(wp), dimension(:), intent(in) :: y
+         real(wp), dimension(size(y)) :: f
+         f=func1(xsav,y)
+         end function f
+        !bl
+        ! sum up the function f from y1(xsav) to y2(xsav)
+        function h(x)
+        implicit none
+        real(wp), dimension(:), intent(in) :: x
+        real(wp), dimension(size(x)) :: h
+        integer :: i
+        do i=1,size(x)
+            xsav=x(i) ! xsav is unique to each thread
+            h(i)=qgaus(f,y1(xsav),y2(xsav))
+        end do
+        end function h
+	
+	end subroutine quad2d_qgaus
+	!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	
+	!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	! qgaus for doing a single integral
+	!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	recursive function qgaus(func1,a,b)
+	implicit none	
+	real(wp), intent(in) :: a,b
+	real(wp) :: qgaus
+	interface
+		function func1(x)
+                import :: wp
+		real(wp), dimension(:), intent(in) :: x
+		real(wp), dimension(size(x)) :: func1
+		end function func1
+	end interface
+	real(wp) :: xm,xr
+	real(wp), dimension(5) :: dx, w = (/ 0.2955242247_wp,0.2692667193_wp,&
+		0.2190863625_wp,0.1494513491_wp,0.0666713443_wp /),&
+		x = (/ 0.1488743389_wp,0.4333953941_wp,0.6794095682_wp,&
+		0.8650633666_wp,0.9739065285_wp /)
+	xm=0.5_wp*(b+a)
+	xr=0.5_wp*(b-a)
+	dx(:)=xr*x(:)
+	qgaus=xr*sum(w(:)*(func1(xm+dx)+func1(xm-dx)))
+	end function qgaus
+	!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+	recursive function romb(func1,a,b)
+	implicit none
+	real(wp), intent(in) :: a,b
+	real(wp) :: romb
+	interface
+		function func1(x)
+                import :: wp
+		real(wp), dimension(:), intent(in) :: x
+		real(wp), dimension(size(x)) :: func1
+		end function func1
+	end interface
+	integer, parameter :: jmax=20,jmaxp=jmax+1,k=5,km=k-1
+	real(wp), parameter :: eps=3.0e-6_wp
+	real(wp), dimension(jmaxp) :: h,s
+	real(wp) :: dromb
+	integer :: j
+	h(1)=1.0_wp
+	do j=1,jmax
+		call trapezoid(func1,a,b,s(j),j)
+		if (j >= k) then
+			call poly_int(h(j-km:j),s(j-km:j),0.0_wp,romb,dromb)
+			if (abs(dromb) <= eps*abs(romb)) return
+		end if
+		s(j+1)=s(j)
+		h(j+1)=0.25_wp*h(j)
+	end do
+	call numerics_error('romb: too many steps')
+	end function romb	
+	
+	recursive subroutine trapezoid(func1,a,b,s,n)
+	implicit none
+	real(wp), intent(in) :: a,b
+	real(wp), intent(inout) :: s
+	integer, intent(in) :: n
+	interface
+		function func1(x)
+                import :: wp
+		real(wp), dimension(:), intent(in) :: x
+		real(wp), dimension(size(x)) :: func1
+		end function func1
+	end interface
+	real(wp) :: del,fsum
+	integer :: it
+	if (n == 1) then
+		s=0.5_wp*(b-a)*sum(func1( (/ a,b /) ))
+	else
+		it=2**(n-2)
+		del=(b-a)/it
+		fsum=sum(func1(arithmetic_prog(a+0.5_wp*del,del,it)))
+		s=0.5_wp*(s+del*fsum)
+	end if
+	end subroutine trapezoid
+
+    function arithmetic_prog(first,increment,n)
+    implicit none
+    real(wp), intent(in) :: first,increment
+    integer, intent(in) :: n
+    real(wp), dimension(n) :: arithmetic_prog
+    integer :: k,k2
+    real(wp) :: temp
+    if (n > 0) arithmetic_prog(1)=first
+    if (n <= npar_arith) then
+        do k=2,n
+            arithmetic_prog(k)=arithmetic_prog(k-1)+increment
+        end do
+    else ! if it is greater than 16, we do the first 8 as usual
+        do k=2,npar_arith2
+            arithmetic_prog(k)=arithmetic_prog(k-1)+increment
+        end do
+        ! then replicate in sizes of 8, 16, 32, and so on
+        temp=increment*npar_arith2
+        k=npar_arith2
+        do
+            if (k >= n) exit
+            k2=k+k
+            arithmetic_prog(k+1:min(k2,n))=temp+arithmetic_prog(1:min(k,n-k))
+            temp=temp+temp
+            k=k2
+        end do
+    end if
+    end function arithmetic_prog
+
+	subroutine numerics_error(string)
+        character(len=*), intent(in) :: string
+        write (*,*) 'numerics_error: ',string
+        !stop 'program terminated by numerics_error'
+	end subroutine numerics_error
+
+
+	!>@author
+	!>Paul Connolly, The University of Manchester
+	!>@brief
+	!>code to do a linear interpolation based on neville's algorithm
+	!> https://en.wikipedia.org/wiki/Neville%27s_algorithm
+	!>param[in] xarr,yarr,x: arrays and position
+	!>param[inout] y,dy: value of y and error in y
+	subroutine poly_int(xarr,yarr,x,y,dy)
+        implicit none
+        real(wp), dimension(:), intent(in) :: xarr,yarr
+        real(wp), intent(in) :: x
+        real(wp), intent(out) :: y,dy
+        integer :: m,n,ns
+        real(wp), dimension(size(xarr)) :: c,d,factor,dx
+        n=assert_eq(size(xarr),size(yarr),'poly_int')
+        c=yarr
+        d=yarr
+        dx=xarr-x
+        ns=iminloc(abs(dx))
+        y=yarr(ns) ! nearest neighbour
+        ns=ns-1
+        do m=1,n-1 ! there are n-1 additional terms
+            factor(1:n-m)=dx(1:n-m)-dx(1+m:n)
+            if (any(factor(1:n-m) == 0.0)) &
+                call numerics_error('poly_int: calculation failure')
+            factor(1:n-m)=(c(2:n-m+1)-d(1:n-m))/factor(1:n-m) ! 3.1.3 recurrence relation
+            d(1:n-m)=dx(1+m:n)*factor(1:n-m) ! 3.1.5 formulae
+            c(1:n-m)=dx(1:n-m)*factor(1:n-m)
+            if (n-m > 2*ns) then
+                dy=c(ns+1)
+            else
+                dy=d(ns)
+                ns=ns-1
+            end if
+            y=y+dy
+        end do
+	end subroutine poly_int
+!	
+	function iminloc(arr)
+        real(wp), dimension(:), intent(in) :: arr
+        integer, dimension(1) :: imin
+        integer :: iminloc
+        imin=minloc(arr(:))
+        iminloc=imin(1)
+	end function iminloc 
+!
+	function assert_eq2(n1,n2,string)
+        character(len=*), intent(in) :: string
+        integer, intent(in) :: n1,n2
+        integer :: assert_eq2
+        if (n1 == n2) then
+            assert_eq2=n1
+        else
+            write (*,*) 'numerics: an assert_eq failed:', &
+                string
+            stop 'program terminated by assert_eq2'
+        end if
+	end function assert_eq2
+!
+	function assert_eq3(n1,n2,n3,string)
+        character(len=*), intent(in) :: string
+        integer, intent(in) :: n1,n2,n3
+        integer :: assert_eq3
+        if (n1 == n2 .and. n2 == n3) then
+            assert_eq3=n1
+        else
+            write (*,*) 'numerics: an assert_eq failed:', &
+                string
+            stop 'program terminated by assert_eq3'
+        end if
+	end function assert_eq3
+!
+	function assert_eq4(n1,n2,n3,n4,string)
+        character(len=*), intent(in) :: string
+        integer, intent(in) :: n1,n2,n3,n4
+        integer :: assert_eq4
+        if (n1 == n2 .and. n2 == n3 .and. n3 == n4) then
+            assert_eq4=n1
+        else
+            write (*,*) 'numerics: an assert_eq failed:', &
+                string
+            stop 'program terminated by assert_eq4'
+        end if
+	end function assert_eq4
+!
+	function assert_eqn(nn,string)
+        character(len=*), intent(in) :: string
+        integer, dimension(:), intent(in) :: nn
+        integer :: assert_eqn
+        if (all(nn(2:) == nn(1))) then
+            assert_eqn=nn(1)
+        else
+            write (*,*) 'numerics: an assert_eq failed:', &
+                string
+            stop 'program terminated by assert_eqn'
+        end if
+	end function assert_eqn
+!	
+    ! series solutions for the incomplete gamma function
+	function gser_scal(a,x,gln)
+	implicit none
+	real(wp), intent(in) :: a,x
+	real(wp), optional, intent(out) :: gln
+	real(wp) :: gser_scal
+	integer, parameter :: itmax=100
+	real(wp), parameter :: eps=epsilon(x)
+	integer :: n
+	real(wp) :: ap,del,summ
+	if (x == 0.0_wp) then
+		gser_scal=0.0_wp
+		return
+	end if
+	ap=a
+	summ=1.0_wp/a
+	del=summ
+	do n=1,itmax
+		ap=ap+1.0_wp
+		del=del*x/ap
+		summ=summ+del
+		if (abs(del) < abs(summ)*eps) exit
+	end do
+	if (n > itmax) call numerics_error('a too large, itmax too small in gser_scal')
+	if (present(gln)) then
+		gln=log_gamma(a)
+		gser_scal=summ*exp(-x+a*log(x)-gln)
+	else
+		gser_scal=summ*exp(-x+a*log(x)-log_gamma(a))
+	end if
+	end function gser_scal
+
+
+    ! series solutions for the incomplete gamma function
+	function gser_vec(a,x,gln)
+	implicit none
+	real(wp), dimension(:), intent(in) :: a,x
+	real(wp), dimension(:), optional, intent(out) :: gln
+	real(wp), dimension(size(a)) :: gser_vec
+	integer, parameter :: itmax=100
+	real(wp), parameter :: eps=epsilon(x)
+	integer :: n
+	real(wp), dimension(size(a)) :: ap,del,summ
+	logical, dimension(size(a)) :: converged,zero
+	n=assert_eq2(size(a),size(x),'gser_vec')
+	zero=(x == 0.0_wp)
+	where (zero) gser_vec=0.0_wp
+	ap=a
+	summ=1.0_wp/a
+	del=summ
+	converged=zero
+	do n=1,itmax
+		where (.not. converged)
+			ap=ap+1.0_wp
+			del=del*x/ap
+			summ=summ+del
+			converged = (abs(del) < abs(summ)*eps)
+		end where
+		if (all(converged)) exit
+	end do
+	if (n > itmax) call numerics_error('a too large, itmax too small in gser_vec')
+	if (present(gln)) then
+		if (size(gln) < size(a)) call &
+			numerics_error('gser: not enough space for gln')
+		gln=log_gamma(a)
+		where (.not. zero) gser_vec=summ*exp(-x+a*log(x)-gln)
+	else
+		where (.not. zero) gser_vec=summ*exp(-x+a*log(x)-log_gamma(a))
+	end if
+	end function gser_vec
+
+
+    ! continued fraction solution of incomplete gamma
+	function gcf_scal(a,x,gln)
+	implicit none
+	real(wp), intent(in) :: a,x
+	real(wp), optional, intent(out) :: gln
+	real(wp) :: gcf_scal
+	integer, parameter :: itmax=100
+	real(wp), parameter :: eps=epsilon(x),fpmin=tiny(x)/eps
+	integer :: i
+	real(wp) :: an,b,c,d,del,h
+	if (x == 0.0_wp) then
+		gcf_scal=1.0_wp
+		return
+	end if
+	b=x+1.0_wp-a
+	c=1.0_wp/fpmin
+	d=1.0_wp/b
+	h=d
+	do i=1,itmax
+		an=-i*(i-a)
+		b=b+2.0_wp
+		d=an*d+b
+		if (abs(d) < fpmin) d=fpmin
+		c=b+an/c
+		if (abs(c) < fpmin) c=fpmin
+		d=1.0_wp/d
+		del=d*c
+		h=h*del
+		if (abs(del-1.0_wp) <= eps) exit
+	end do
+	if (i > itmax) call numerics_error('a too large, itmax too small in gcf_scal')
+	if (present(gln)) then
+		gln=log_gamma(a)
+		gcf_scal=exp(-x+a*log(x)-gln)*h
+	else
+		gcf_scal=exp(-x+a*log(x)-log_gamma(a))*h
+	end if
+	end function gcf_scal
+
+
+    ! continued fraction solution of incomplete gamma
+	function gcf_vec(a,x,gln)
+	implicit none
+	real(wp), dimension(:), intent(in) :: a,x
+	real(wp), dimension(:), optional, intent(out) :: gln
+	real(wp), dimension(size(a)) :: gcf_vec
+	integer, parameter :: itmax=100
+	real(wp), parameter :: eps=epsilon(x),fpmin=tiny(x)/eps
+	integer :: i
+	real(wp), dimension(size(a)) :: an,b,c,d,del,h
+	logical, dimension(size(a)) :: converged,zero
+	i=assert_eq2(size(a),size(x),'gcf_vec')
+	zero=(x == 0.0_wp)
+	where (zero)
+		gcf_vec=1.0_wp
+	elsewhere
+		b=x+1.0_wp-a
+		c=1.0_wp/fpmin
+		d=1.0_wp/b
+		h=d
+	end where
+	converged=zero
+	do i=1,itmax
+		where (.not. converged)
+			an=-i*(i-a)
+			b=b+2.0_wp
+			d=an*d+b
+			d=merge(fpmin,d, abs(d)<fpmin )
+			c=b+an/c
+			c=merge(fpmin,c, abs(c)<fpmin )
+			d=1.0_wp/d
+			del=d*c
+			h=h*del
+			converged = (abs(del-1.0_wp)<=eps)
+		end where
+		if (all(converged)) exit
+	end do
+	if (i > itmax) call numerics_error('a too large, itmax too small in gcf_vec')
+	if (present(gln)) then
+		if (size(gln) < size(a)) call &
+			numerics_error('gser: not enough space for gln')
+		gln=log_gamma(a)
+		where (.not. zero) gcf_vec=exp(-x+a*log(x)-gln)*h
+	else
+		where (.not. zero) gcf_vec=exp(-x+a*log(x)-log_gamma(a))*h
+	end if
+	end function gcf_vec
+
+
+    ! calculates this incomplete gamma function
+	function gammainc_scal(a,x)
+	implicit none
+	real(wp), intent(in) :: a,x
+	real(wp) :: gammainc_scal
+	call assert1( x >= 0.0_wp,  a > 0.0_wp, 'gamminc_scal args')
+	if (x<a+1.0_wp) then
+		gammainc_scal=gser(a,x)
+	else
+		gammainc_scal=1.0_wp-gcf(a,x)
+	end if
+	end function gammainc_scal
+
+
+	function gammainc_vec(a,x)
+	implicit none
+	real(wp), dimension(:), intent(in) :: a,x
+	real(wp), dimension(size(x)) :: gammainc_vec
+	logical, dimension(size(x)) :: mask
+	integer :: ndum
+	ndum=assert_eq2(size(a),size(x),'gamminc_vec')
+	call assert1( all(x >= 0.0_wp),  all(a > 0.0_wp), 'gamminc_vec args')
+	mask = (x<a+1.0_wp)
+	gammainc_vec=merge(gser(a,merge(x,0.0_wp,mask)), &
+		1.0_wp-gcf(a,merge(x,0.0_wp,.not. mask)),mask)
+	end function gammainc_vec
+
+    function invgammainc(p,a) 
+        implicit none
+        real(wp), intent(in) :: a
+        real(wp), intent(in) :: p
+        real(wp) :: invgammainc
+
+        integer :: j
+        real(wp) :: x,err,t,u,pp,lna1,afac,gln,a1
+        real(wp), parameter :: eps=1.e-8_wp
+    
+        a1=a-1.0_wp
+        gln=log_gamma(a)
+        if(a<=0.0_wp) print *, "a must be positive"
+        if(p>=1.0_wp) then
+            invgammainc=max(100._wp,a+100._wp*sqrt(a))
+            return
+        endif
+        if(p<=0.0_wp) then
+            invgammainc=0.0_wp
+            return
+        endif
+        if(a>1.0_wp) then
+            lna1=log(a1)
+            afac=exp(a1*(lna1-1._wp)-gln)
+            if(p<0.5_wp) then
+                pp=p
+            else
+                pp=1._wp-p
+            endif
+            t=sqrt(-2._wp*log(pp))
+            x=(2.30753_wp+t*0.27061_wp)/(1._wp+t*(0.99229_wp+t*0.04481_wp))-t
+            if(p<0.5_wp) x=-x
+            x=max(1.e-3_wp,a*(1._wp-1._wp/(9._wp*a)-x/(3._wp*sqrt(a)))**3)
+        else
+            t=1.0_wp-a*(0.253_wp+a*0.12_wp)
+            if(p<t) then 
+                x=(p/t)**(1._wp/a)
+            else
+                x=1._wp-log(1._wp-(p-t)/(1._wp-t))
+            endif
+        
+        endif
+    
+        do j=0,11
+            if(x<=0.0_wp) then
+                invgammainc=0.0_wp
+                return
+            endif
+            err=gammainc(a,x)-p
+            if(a>1.) then
+                t=afac*exp(-(x-a1)+a1*(log(x)-lna1))
+            else
+                t=exp(-x+a1*log(x)-gln)
+            endif
+            u=err/t
+            t=u/(1._wp-0.5_wp*min(1._wp,u*((a-1._wp)/x-1._wp)))
+            x=x-t
+            if(x<=0._wp) x=0.5_wp*(x+t)
+            if(abs(t) < eps*x) exit
+        enddo
+    
+        invgammainc=x
+        return 
+    end function invgammainc
+
+	subroutine assert1(l1,l2,string)
+        character(len=*), intent(in) :: string
+        logical, intent(in) :: l1,l2
+        if (.not.((l1).and.(l2)) ) then
+            write (*,*) 'numerics: an assert1 failed:', &
+                string
+            stop 'program terminated by assert1'
+        end if
+	end subroutine assert1
+
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    ! This evaluates the integrand                                                       !
+    ! for collisions - mass weighted praci                                               !
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    function dintegral_coll_mass(x,y)
+        implicit none
+        real(wp), intent(in) :: x
+        real(wp), dimension(:), intent(in) :: y
+        real(wp), dimension(size(y)) :: dintegral_coll_mass
+        real(wp) :: diamr, mr, vr, n,nt,nb,mb,mt
+        real(wp), dimension(size(y)) :: mi, diami, delv, vi
+        integer :: i
+
+
+        mr=x
+        mi=y
+        diamr=(mr/c_1)**(1.0_wp/d_1)
+        diami=(mi/c_2)**(1.0_wp/d_2)
+        ! fall-speeds
+        vr=a_1*diamr**b_1
+        vi=a_2*diami**b_2
+        delv=abs(vr-vi)
+        ! last bit is to convert to integral over m
+        dintegral_coll_mass=c_1*diamr**d_1*E12*pi*0.25_wp*(diamr+diami)**2* &
+            delv*n_1*diamr**alph_1* &
+            exp(-lam_1*diamr)*n_2*diami**alph_2*exp(-lam_2*diami)* &
+            (diamr**(1.0_wp-d_1)) / (c_1*d_1)*(diami**(1.0_wp-d_2)) / (c_2*d_2)
+        
+    end function dintegral_coll_mass
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    ! This evaluates the integrand                                                       !
+    ! for collisions - num  weighted npraci                                               !
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    function dintegral_coll_num(x,y)
+        implicit none
+        real(wp), intent(in) :: x
+        real(wp), dimension(:), intent(in) :: y
+        real(wp), dimension(size(y)) :: dintegral_coll_num
+        real(wp) :: diamr, mr, vr, n,nt,nb,mb,mt
+        real(wp), dimension(size(y)) :: mi, diami, delv, vi
+        integer :: i
+
+
+        mr=x
+        mi=y
+        diamr=(mr/c_1)**(1.0_wp/d_1)
+        diami=(mi/c_2)**(1.0_wp/d_2)
+        ! fall-speeds
+        vr=a_1*diamr**b_1
+        vi=a_2*diami**b_2
+        delv=abs(vr-vi)
+        ! last bit is to convert to integral over m
+        dintegral_coll_num=E12*pi*0.25_wp*(diamr+diami)**2* &
+            delv*n_1*diamr**alph_1* &
+            exp(-lam_1*diamr)*n_2*diami**alph_2*exp(-lam_2*diami)* &
+            (diamr**(1.0_wp-d_1)) / (c_1*d_1)*(diami**(1.0_wp-d_2)) / (c_2*d_2)
+        
+    end function dintegral_coll_num
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    ! mode 1 fragmentation                                                         !
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    !>@author
+    !>Paul J. Connolly, The University of Manchester
+    !>@brief
+    !>calculates the number of fragments and their mass
+    subroutine calculate_mode1(min1,min2,t,n,nt,nb,mb,mt)
+        implicit none
+        real(wp), intent(in) :: min1,min2,t
+        real(wp), intent(inout) :: n, nt, nb, mb, mt
+        real(wp) :: tc, dthresh, x, beta1,log10zeta, log10nabla, t0, zetab, nablab, tb0, &
+            sigma, omega, m,d, fac1
+        
+        if((min2>min1).or.(min1<=6.55e-11_wp)) then
+            ! the ice is more massive than the drop or drop small, don't do it
+            n=0._wp
+            nt=0._wp
+            nb=0._wp
+            return
+        endif
+    
+        d = (6._wp*min1/rhow)**(1._wp/3._wp)
+        tc=t-ttr
+        dthresh = min(d,1.6e-3)
+        x = log10(dthresh*1000._wp)
+        
+        ! table 3, phillips et al.
+        beta1 = 0.
+        log10zeta = 2.4268_wp*x*x*x + 3.3274_wp*x*x + 2.0783_wp*x + 1.2927_wp
+        log10nabla = 0.1242_wp*x*x*x - 0.2316_wp*x*x - 0.9874_wp*x - 0.0827_wp
+        t0 = -1.3999_wp*x*x*x - 5.3285_wp*x*x - 3.9847_wp*x - 15.0332_wp
+        
+        ! table 4, phillips et al. 
+        zetab = -0.4651_wp*x*x*x - 1.1072_wp*x*x - 0.4539_wp*x+0.5137_wp
+        nablab = 28.5888*x*x*x + 49.8504_wp*x*x + 22.4873_wp*x + 8.0481_wp
+        tb0 = 13.3588_wp*x*x*x + 15.7432_wp*x*x - 2.6545_wp*x - 18.4875_wp
+        
+        sigma = min(max((d-50.e-6_wp)/10.e-6_wp,0._wp), 1._wp)
+        omega = min(max((-3._wp-tc)/3._wp,0._wp),1._wp)
+        
+        n = sigma*omega*(10._wp**log10zeta *(10**log10nabla)**2) / &
+            ((tc-t0)**2+(10._wp*log10nabla)**2+beta1*tc)
+        
+        ! total number of fragments
+        n=n*d/dthresh
+        ! number of large fragments
+        nb = min(sigma*omega*(zetab*nablab**2/((tc-tb0)**2+nablab**2)),n)
+        ! number of small fragments
+        nt = n-nb
+        
+        m=oneoversix*rhow*pi*d**3
+        
+        ! mass of large fragments
+        mb=0.4_wp*m
+        
+        ! mass of small fragments
+        mt=oneoversix*rhoi*pi*dtt**3
+        
+        fac1=min((mt*nt+mb*nb)/min1,1._wp)
+        nt = nt *fac1
+        nb = nb *fac1
+        n=nt+nb
+        
+    end subroutine calculate_mode1
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    ! mode 1 fragmentation integral over size distribution                         !
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    !>@author
+    !>Paul J. Connolly, The University of Manchester
+    !>@brief
+    !>calculates the number of fragments and their mass
+    ! need to have set n_1, t_send and lam_1 and alph_1
+    function integral_m1(x)
+        implicit none
+		real(wp), dimension(:), intent(in) :: x
+		real(wp), dimension(size(x)) :: integral_m1
+		
+		real(wp), dimension(size(x)) :: nfrag
+		real(wp) :: n,nt,nb,mb,mt
+		integer :: i
+		
+		do i=1,size(x)
+		    call calculate_mode1(x(i),0._wp,t_send,n,nt,nb,mb,mt)
+		    nfrag(i)=n
+		enddo
+		
+    
+        integral_m1=n_1*exp(-lam_1*x)*x**alph_1*nfrag
+    end function integral_m1
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    ! This evaluates the integrand                                                       !
+    ! for mode 1 ice multiplication                                                      !
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    function integral_m1m(x)
+        implicit none
+		real(wp), dimension(:), intent(in) :: x
+		real(wp), dimension(size(x)) :: integral_m1m
+		
+		real(wp), dimension(size(x)) :: nfrag
+		real(wp) :: n,nt,nb,mb,mt
+		integer :: i
+		
+		do i=1,size(x)
+		    call calculate_mode1(x(i),0._wp,t_send,n,nt,nb,mb,mt)
+		    nfrag(i)=(nt*mt+nb*mb)
+		enddo
+		
+    
+        integral_m1m=n_1*exp(-lam_1*x)*x**alph_1*nfrag
+    end function integral_m1m
+
+    function dintegral_mode1(x,y)
+        implicit none
+        real(wp), intent(in) :: x
+        real(wp), dimension(:), intent(in) :: y
+        real(wp), dimension(size(y)) :: dintegral_mode1
+        real(wp) :: diamr, mr, vr, n,nt,nb,mb,mt
+        real(wp), dimension(size(y)) :: mi, diami, delv, vi
+        integer :: i
+
+
+        mr=x
+        mi=y
+        diamr=(mr/c_1)**(1.0_wp/d_1)
+        diami=(mi/c_2)**(1.0_wp/d_2)
+        ! fall-speeds
+        vr=a_1*diamr**b_1
+        vi=a_2*diami**b_2
+        delv=abs(vr-vi)
+         ! last bit is to convert to integral over m
+        dintegral_mode1=e12*pi*0.25_wp*(diamr+diami)**2* &
+            delv*n_1*diamr**alph_1* &
+            exp(-lam_1*diamr)*n_2*diami**alph_2*exp(-lam_2*diami)* &
+            (diamr**(1.0_wp-d_1)) / (c_1*d_1)*(diami**(1.0_wp-d_2)) / (c_2*d_2)
+        
+        do i=1,size(y)
+            call calculate_mode1(mr,mi(i),t_send,n,nt,nb,mb,mt)
+            dintegral_mode1(i)=dintegral_mode1(i)*n
+        enddo
+    
+    end function dintegral_mode1
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    ! This evaluates the integrand                                                       !
+    ! for mode 2 ice multiplication                                                      !
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    function dintegral_mode1_mass(x,y)
+        implicit none
+        real(wp), intent(in) :: x
+        real(wp), dimension(:), intent(in) :: y
+        real(wp), dimension(size(y)) :: dintegral_mode1_mass
+        real(wp) :: diamr, mr, vr, n,nt,nb,mb,mt
+        real(wp), dimension(size(y)) :: mi, diami, delv, vi
+        integer :: i
+
+
+        mr=x
+        mi=y
+        diamr=(mr/c_1)**(1.0_wp/d_1)
+        diami=(mi/c_2)**(1.0_wp/d_2)
+        
+        vr=a_1*diamr**b_1
+        vi=a_2*diami**b_2
+        delv=abs(vr-vi)
+         
+        dintegral_mode1_mass=e12*pi*0.25_wp*(diamr+diami)**2* &
+            delv*n_1*diamr**alph_1* &
+            exp(-lam_1*diamr)*n_2*diami**alph_2*exp(-lam_2*diami)* &
+            (diamr**(1.0_wp-d_1)) / (c_1*d_1)*(diami**(1.0_wp-d_2)) / (c_2*d_2)
+        
+        do i=1,size(y)
+            call calculate_mode1(mr,mi(i),t_send,n,nt,nb,mb,mt)
+            dintegral_mode1_mass(i)=dintegral_mode1_mass(i)*(nt*mt+nb*mb)
+        enddo
+    
+    end function dintegral_mode1_mass
+
+    function dintegral_mode2(x,y)
+        implicit none
+        real(wp), intent(in) :: x
+        real(wp), dimension(:), intent(in) :: y
+        real(wp), dimension(size(y)) :: dintegral_mode2
+        real(wp) :: diamr, mr, vr
+        real(wp), dimension(size(y)) :: mi, diami, delv, vi, k0, de, nfrag, nfrag_freeze1, &
+            nfrag_freeze2
+
+        mr=x
+        mi=y
+        diamr=(mr/c_1)**(1.0_wp/d_1)
+        diami=(mi/c_2)**(1.0_wp/d_2)
+        ! fall-speeds
+        vr=a_1*diamr**b_1
+        vi=a_2*diami**b_2
+        delv=abs(vr-vi)
+        ! last bit is to convert to integral over m
+        dintegral_mode2=e12*pi*0.25_wp*(diamr+diami)**2* &
+            delv*n_1*diamr**alph_1* &
+            exp(-lam_1*diamr)*n_2*diami**alph_2*exp(-lam_2*diami)* &
+            (diamr**(1.0_wp-d_1)) / (c_1*d_1)*(diami**(1.0_wp-d_2)) / (c_2*d_2)
+        
+        ! cke from equation 6
+        k0=0.5_wp*(mr*mi/(mr+mi))*(vr-vi)**2
+        ! de parameter
+        de=k0/(gamma_liq*pi*diamr**2)
+        ! number of fragments in spalsh
+        nfrag=3.0_wp*max(de-decrit, 0.0_wp)
+        ! number of fragments in splash that freeze due to mode 1
+        nfrag_freeze1=nfrag*f_mode2
+        ! number of fragments in splash that freeze due to mode 2
+        nfrag_freeze2=nfrag*(1.0_wp-f_mode2)*phi_mode2
+        
+        dintegral_mode2=dintegral_mode2*nfrag_freeze2
+    
+    end function dintegral_mode2
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+	!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	! Integrand for collisional breakup following Phillips et al. (2017).
+	!
+	! x, y        : masses of the two colliding particles
+	! type1_send  : collision type, e.g. CB_II, CB_IS, ...
+	!
+	! Particle 1 (x) is treated as the fragmenting particle for the Phillips
+	! breakup parameterisation.
+	!
+	! The particle-distribution parameters c_1,d_1,a_1,b_1,... and
+	! c_2,d_2,a_2,b_2,... must be set before calling quad_qgaus.
+	!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+	function dintegral_collisional_breakup(x,y)
+	
+		implicit none
+	
+		real(wp), intent(in) :: x
+		real(wp), dimension(:), intent(in) :: y
+		real(wp), dimension(size(y)) :: dintegral_collisional_breakup
+		real(wp) :: m1, diam1, v1
+		real(wp), dimension(size(y)) :: m2, diam2, v2, delv, k0, nfrag
+		real(wp) :: alpha, a0, t0, apar, cpar, nmax, gamma
+		real(wp) :: symmetry_factor
+		real(wp), parameter :: frimes = 0.1_wp
+	
+		! Particle masses, diameters and fall speeds
+		m1 = x
+		m2 = y
+	
+		diam1 = (m1/c_1)**(1.0_wp/d_1)
+		diam2 = (m2/c_2)**(1.0_wp/d_2)
+	
+		v1 = a_1*diam1**b_1
+		v2 = a_2*diam2**b_2
+		delv = abs(v1-v2)
+	
+		! Collision kernel multiplied by the two particle distributions.
+		! The final factors are dD/dm for conversion to integration over mass.
+		dintegral_collisional_breakup =                         &
+			 e12*pi*0.25_wp*(diam1+diam2)**2*delv              &
+		   * n_1*diam1**alph_1*exp(-lam_1*diam1)               &
+		   * n_2*diam2**alph_2*exp(-lam_2*diam2)               &
+		   * diam1**(1.0_wp-d_1)/(c_1*d_1)                     &
+		   * diam2**(1.0_wp-d_2)/(c_2*d_2)
+	
+		! Phillips et al. (2017) breakup parameters.
+		! Particle 1 is taken to be the fragmenting particle.
+		alpha = pi*diam1**2
+		apar = 0.0_wp
+		cpar = 0.0_wp
+		nmax = 0.0_wp
+		gamma = 1.0_wp
+		symmetry_factor = 1.0_wp
+	
+		select case (type1_send)
+	
+		case (CB_GG_SMALL)
+	
+			! Graupel-graupel collisions with particle 1 in the small
+			! fragmenting-graupel size range (approximately 0.5-5 mm).
+			a0 = 3.78e4_wp*(1.0_wp + 0.0079_wp/diam1**1.5_wp)
+			t0 = -15.0_wp
+	
+			apar = a0*oneoverthree +                            &
+				   max(2.0_wp*a0*oneoverthree -                &
+				   a0*oneovernine*abs(t_send-t0),0.0_wp)
+	
+			cpar = 6.30e6_wp*phi_phillips
+			nmax = 100.0_wp
+			gamma = 0.30_wp
+	
+			! No factor of 1/2 because the two integration limits differ.
+			symmetry_factor = 1.0_wp
+	
+		case (CB_GG_HAIL)
+	
+			! Hail / large-graupel breakup.
+			a0 = 4.35e5_wp
+			t0 = -15.0_wp
+	
+			apar = a0*oneoverthree +                            &
+				   max(2.0_wp*a0*oneoverthree -                &
+				   a0*oneovernine*abs(t_send-t0),0.0_wp)
+	
+			cpar = 3.31e5_wp
+			nmax = 1000.0_wp
+			gamma = 0.54_wp
+	
+			! Use 1/2 only where both quadratures use the same size limits.
+			symmetry_factor = 0.5_wp
+	
+		case (CB_II, CB_IS, CB_IG, CB_SI, CB_SS, CB_SG)
+	
+			! Ice/snow fragmentation parameters from Phillips et al. (2017).
+			! These collision types currently use the same breakup formulation.
+			if (t_send >= -17.0_wp .and. t_send <= -12.0_wp) then
+	
+				! Dendritic regime
+				apar = 1.41e6_wp*(1.0_wp + 100.0_wp*frimes**2) * &
+					   (1.0_wp + 3.98e-5_wp/diam1**1.5_wp)
+	
+				cpar = 3.09e6_wp*frimes
+				nmax = 100.0_wp
+				gamma = 0.50_wp - 0.25_wp*frimes
+	
+			elseif (t_send < -17.0_wp .or.                     &
+				   (t_send > -12.0_wp .and. t_send <= -9.0_wp)) then
+	
+				! Spatial-planar regime
+				apar = 1.58e7_wp*(1.0_wp + 100.0_wp*frimes**2) * &
+					   (1.0_wp + 1.33e-4_wp/diam1**1.5_wp)
+	
+				cpar = 7.08e6_wp*frimes
+				nmax = 100.0_wp
+				gamma = 0.50_wp - 0.25_wp*frimes
+	
+			else
+	
+				! No breakup in the remaining temperature range.
+				dintegral_collisional_breakup = 0.0_wp
+				return
+	
+			endif
+	
+			! For like-like collisions over identical integration limits,
+			! the double integral counts each physical pair twice.
+			if (type1_send == CB_II .or. type1_send == CB_SS) then
+				symmetry_factor = 0.5_wp
+			endif
+	
+		case default
+	
+			! Unknown collision type.
+			dintegral_collisional_breakup = 0.0_wp
+			return
+	
+		end select
+	
+		! Collision kinetic energy using the reduced mass.
+		k0 = 0.5_wp*(m1*m2/(m1+m2))*delv**2
+	
+		! Phillips et al. (2017), equation 13:
+		! number of fragments produced by one collision.
+		nfrag = min(alpha*apar *                                  &
+			(1.0_wp-exp(-(cpar*k0/(alpha*apar))**gamma)), nmax)
+	
+		! Apply the collision-counting symmetry correction where required.
+		dintegral_collisional_breakup = symmetry_factor *         &
+			dintegral_collisional_breakup*nfrag
+	
+	end function dintegral_collisional_breakup
+	!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
 
 END MODULE module_mp_morr_two_moment
 !+---+-----------------------------------------------------------------+

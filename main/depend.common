@@ -2372,6 +2372,7 @@ module_physics_addtendc.o: \
 
 
 module_physics_init.o: \
+        module_bl_shinhong.o \
 	module_bl_gbmpbl.o \
 	module_bl_shinhong.o \
 	module_cu_ntiedtke.o \
