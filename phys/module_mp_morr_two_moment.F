@@ -264,7 +264,8 @@ MODULE MODULE_MP_MORR_TWO_MOMENT
 
      real(wp), private :: xsav, mithresh,miupper, mrthresh, mrupper, &
         c_1,c_2,d_1,d_2,lam_1,lam_2,n_1,n_2,alph_1,alph_2, a_1, b_1,a_2,b_2,rho_1,rho_2, &
-        e12,f_mode2, type1_send
+        e12,f_mode2
+     integer, private :: type1_send
 !$OMP THREADPRIVATE (xsav,mrthresh,mrupper,miupper,c_1,c_2,d_1,d_2,lam_1,lam_2)
 !$OMP THREADPRIVATE (n_1,n_2,alph_1,alph_2,a_1,b_1,a_2,b_2,rho_1,rho_2,e12,t_send,f_mode2)
 !$OMP THREADPRIVATE (type1_send)
