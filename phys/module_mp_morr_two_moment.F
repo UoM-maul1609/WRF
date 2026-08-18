@@ -882,6 +882,7 @@ SUBROUTINE MP_MORR_TWO_MOMENT(ITIMESTEP,                       &
        MORR_ACC_COLLISIONS, &
        MORR_SIP_MODE1, &
        MORR_SIP_MODE2, &
+       MORR_ICE_ICE_COLLISIONS, &
        QC1D, QI1D, QS1D, QR1D,NI1D, NS1D, NR1D,                                          &
        T_TEND1D,QV_TEND1D, T1D, QV1D, P1D, DZ1D, W1D, WVAR1D,                   &
        PRECPRT1D,SNOWRT1D,                                                               &
@@ -994,6 +995,7 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
        MORR_ACC_COLLISIONS, &
        MORR_SIP_MODE1, &
        MORR_SIP_MODE2, &
+       MORR_ICE_ICE_COLLISIONS, &
        QC3D,QI3D,QNI3D,QR3D,NI3D,NS3D,NR3D,              &
        T3DTEN,QV3DTEN,T3D,QV3D,PRES,DZQ,W3D,WVAR,PRECRT,SNOWRT,            &
        SNOWPRT,GRPLPRT,                & ! hm added 7/13/13
@@ -1106,7 +1108,8 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
 #if (WRF_CHEM == 1)
       LOGICAL, INTENT(IN) :: has_wetscav
 #endif
-        LOGICAL, INTENT(IN) :: MORR_ACC_COLLISIONS, MORR_SIP_MODE1, MORR_SIP_MODE2
+        LOGICAL, INTENT(IN) :: MORR_ACC_COLLISIONS, MORR_SIP_MODE1, MORR_SIP_MODE2, &
+        	MORR_ICE_ICE_COLLISIONS
 
 
 !.....................................................................................................
@@ -1202,6 +1205,8 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
 
      REAL, DIMENSION(KTS:KTE) ::  PMODE1, NMODE1
      REAL, DIMENSION(KTS:KTE) ::  PMODE2, NMODE2
+     REAL, DIMENSION(KTS:KTE) ::  PIICGG, PIICII, PIICIS, PIICIG, PIICSI, PIICSS, PIICSG
+     REAL, DIMENSION(KTS:KTE) ::  NIICGG, NIICII, NIICIS, NIICIG, NIICSI, NIICSS, NIICSG
 
 ! TIME-VARYING ATMOSPHERIC PARAMETERS
 
@@ -2467,10 +2472,25 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
 	    NSCNG(K) = 0.
  	    NGRACS(K) = 0.
 	    NSUBG(K) = 0.
-            PMODE1(k) = 0.      ! going to ice 
-            NMODE1(k) = 0.      ! going to ice 
-            PMODE2(k) = 0.      ! going to ice 
-            NMODE2(k) = 0.      ! going to ice 
+        PMODE1(k) = 0.      ! going to ice 
+        NMODE1(k) = 0.      ! going to ice 
+        PMODE2(k) = 0.      ! going to ice 
+        NMODE2(k) = 0.      ! going to ice 
+        
+        PIICGG(K) = 0.		! GOING TO ICE
+        PIICII(K) = 0.		! GOING TO ICE
+        PIICIS(K) = 0.		! GOING TO ICE
+        PIICIG(K) = 0.		! GOING TO ICE
+        PIICSI(K) = 0.		! GOING TO ICE
+        PIICSS(K) = 0.		! GOING TO ICE
+        PIICSG(K) = 0.		! GOING TO ICE
+        NIICGG(K) = 0.		! GOING TO ICE
+        NIICII(K) = 0.		! GOING TO ICE
+        NIICIS(K) = 0.		! GOING TO ICE
+        NIICIG(K) = 0.		! GOING TO ICE
+        NIICSI(K) = 0.		! GOING TO ICE
+        NIICSS(K) = 0.		! GOING TO ICE
+        NIICSG(K) = 0.		! GOING TO ICE
 
 !CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
 ! CALCULATION OF MICROPHYSICAL PROCESS RATES
@@ -2919,11 +2939,7 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
             END IF
 !         END IF
 
-! PJC mode 1 collisions, mode 2 collisions, ice-ice collisions
-
-
-
-
+		 ! PJC mode 1 collisions, mode 2 collisions, ice-ice collisions
          IF (QR3D(K).GE.0.1E-8.and.MORR_SIP_MODE1) THEN
             
             IF (QI3D(K).GE.0.1E-8) THEN 
@@ -3068,6 +3084,214 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
             endif
          endif
 
+		 ! Collisional breakup following Phillips et al. (2017)
+         IF (MORR_ICE_ICE_COLLISIONS) THEN
+         	! small hail
+         	t_send=T3D(K)-ttr
+         	type1_send=CB_GG_SMALL
+            IF (QG3D(K).GE.0.1E-8) THEN 
+               mrthresh=cg*500.e-6_wp**dg
+               mrupper=cg*5000.e-6_wp**dg
+               mrupper=min(cg*(pthreshg/LAMG(k))**dg,mrupper)
+               mithresh=cg*500.e-6_wp**dg
+               miupper=cg*5000.e-6_wp**dg
+               miupper=min(cg*(pthreshg/LAMG(k))**dg,miupper)
+               if((mrupper.gt.mrthresh).and.(miupper.gt.mithresh)) then
+                       c_1=cg;       	c_2=Cg
+                       d_1=dg;       	d_2=dg
+                       a_1=agn(k);      a_2=agn(k)
+                       b_1=bg;          b_2=bg
+                       alph_1=0.;       alph_2=0.
+                       e12=eii
+                       lam_1=LAMG(k);   lam_2=LAMG(k)
+                       n_1=n0g(k);      n_2=n0g(k)
+                       
+                       call quad2d_qgaus(dintegral_collisional_breakup,&
+                       		limit1_collisional_x, limit2_collisional, &
+				        	mrthresh, mrupper, dummy_calc)
+                       NIICGG(K)=real(dummy_calc)* RHO(K)
+                       PIICGG(K)=real(dummy_calc)* RHO(K) *MI0
+                endif
+            endif
+            ! large hail
+         	type1_send=CB_GG_HAIL
+            IF (QG3D(K).GE.0.1E-8) THEN 
+               mrthresh=cg*5000.e-6_wp**dg
+               mrupper=cg*(pthreshg/LAMG(k))**dg
+               mithresh=cg*5000.e-6_wp**dg
+               miupper=cg*(pthreshg/LAMG(k))**dg
+               if((mrupper.gt.mrthresh).and.(miupper.gt.mithresh)) then
+                       c_1=cg;       	c_2=Cg
+                       d_1=dg;       	d_2=dg
+                       a_1=agn(k);      a_2=agn(k)
+                       b_1=bg;          b_2=bg
+                       alph_1=0.;       alph_2=0.
+                       e12=eii
+                       lam_1=LAMG(k);   lam_2=LAMG(k)
+                       n_1=n0g(k);      n_2=n0g(k)
+                       
+                       call quad2d_qgaus(dintegral_collisional_breakup,&
+                       		limit1_collisional_x, limit2_collisional, &
+				        	mrthresh, mrupper, dummy_calc)
+                       NIICGG(K)=NIICGG(K)+real(dummy_calc)* RHO(K)
+                       PIICGG(K)=PIICGG(K)+real(dummy_calc)* RHO(K) *MI0
+                endif
+            endif
+            ! ice with graupel
+         	type1_send=CB_IG 
+            IF (QI3D(K).GE.0.1E-8.and.QG3D(K).GE.0.1E-8) THEN 
+               mrthresh=ci*500.e-6_wp**di
+               mrupper=ci*5000.e-6_wp**di
+               mrupper=min(ci*(pthreshi/LAMI(k))**di,mrupper)
+               mithresh=cg*1.e-6_wp**dg
+               miupper=cg*(pthreshg/LAMG(k))**dg
+               if((mrupper.gt.mrthresh).and.(miupper.gt.mithresh)) then
+                       c_1=ci;       	c_2=Cg
+                       d_1=di;       	d_2=dg
+                       a_1=ain(k);      a_2=agn(k)
+                       b_1=bi;          b_2=bg
+                       alph_1=0.;       alph_2=0.
+                       e12=eii
+                       lam_1=LAMI(k);   lam_2=LAMG(k)
+                       n_1=n0i(k);      n_2=n0g(k)
+                       
+                       call quad2d_qgaus(dintegral_collisional_breakup,&
+                       		limit1_collisional, limit2_collisional, &
+				        	mrthresh, mrupper, dummy_calc)
+                       NIICIG(K)=real(dummy_calc)* RHO(K)
+                       PIICIG(K)=real(dummy_calc)* RHO(K) *MI0
+                endif
+            endif
+            ! snow with graupel
+         	type1_send=CB_SG 
+            IF (QNI3D(K).GE.0.1E-8.and.QG3D(K).GE.0.1E-8) THEN 
+               mrthresh=cs*500.e-6_wp**ds
+               mrupper=cs*5000.e-6_wp**ds
+               mrupper=min(cs*(pthreshs/LAMS(k))**ds,mrupper)
+               mithresh=cg*1.e-6_wp**dg
+               miupper=cg*(pthreshg/LAMG(k))**dg
+               if((mrupper.gt.mrthresh).and.(miupper.gt.mithresh)) then
+                       c_1=cs;       	c_2=Cg
+                       d_1=ds;       	d_2=dg
+                       a_1=asn(k);      a_2=agn(k)
+                       b_1=bs;          b_2=bg
+                       alph_1=0.;       alph_2=0.
+                       e12=eii
+                       lam_1=LAMS(k);   lam_2=LAMG(k)
+                       n_1=n0s(k);      n_2=n0g(k)
+                       
+                       call quad2d_qgaus(dintegral_collisional_breakup,&
+                       		limit1_collisional, limit2_collisional, &
+				        	mrthresh, mrupper, dummy_calc)
+                       NIICSG(K)=real(dummy_calc)* RHO(K)
+                       PIICSG(K)=real(dummy_calc)* RHO(K) *MI0
+                endif
+            endif
+            ! ice with ice
+         	type1_send=CB_II
+            IF (QI3D(K).GE.0.1E-8) THEN 
+               mrthresh=ci*500.e-6_wp**di
+               mrupper=ci*5000.e-6_wp**di
+               mrupper=min(ci*(pthreshi/LAMI(k))**di,mrupper)
+               mithresh=ci*1.e-6_wp**di
+               miupper=ci*(pthreshi/LAMI(k))**di
+               if((mrupper.gt.mrthresh).and.(miupper.gt.mithresh)) then
+                       c_1=ci;       	c_2=ci
+                       d_1=di;       	d_2=di
+                       a_1=ain(k);      a_2=ain(k)
+                       b_1=bi;          b_2=bi
+                       alph_1=0.;       alph_2=0.
+                       e12=eii
+                       lam_1=LAMI(k);   lam_2=LAMI(k)
+                       n_1=n0i(k);      n_2=n0i(k)
+                       
+                       call quad2d_qgaus(dintegral_collisional_breakup,&
+                       		limit1_collisional, limit2_collisional, &
+				        	mrthresh, mrupper, dummy_calc)
+                       NIICII(K)=real(dummy_calc)* RHO(K)
+                       PIICII(K)=real(dummy_calc)* RHO(K) *MI0
+                endif
+            endif
+            ! snow with snow
+         	type1_send=CB_SS
+            IF (QNI3D(K).GE.0.1E-8) THEN 
+               mrthresh=cs*500.e-6_wp**ds
+               mrupper=cs*5000.e-6_wp**ds
+               mrupper=min(cs*(pthreshs/LAMS(k))**ds,mrupper)
+               mithresh=cs*1.e-6_wp**ds
+               miupper=cs*(pthreshs/LAMS(k))**ds
+               if((mrupper.gt.mrthresh).and.(miupper.gt.mithresh)) then
+                       c_1=cs;       	c_2=cs
+                       d_1=ds;       	d_2=ds
+                       a_1=asn(k);      a_2=asn(k)
+                       b_1=bs;          b_2=bs
+                       alph_1=0.;       alph_2=0.
+                       e12=eii
+                       lam_1=LAMS(k);   lam_2=LAMS(k)
+                       n_1=n0s(k);      n_2=n0s(k)
+                       
+                       call quad2d_qgaus(dintegral_collisional_breakup,&
+                       		limit1_collisional, limit2_collisional, &
+				        	mrthresh, mrupper, dummy_calc)
+                       NIICSS(K)=real(dummy_calc)* RHO(K)
+                       PIICSS(K)=real(dummy_calc)* RHO(K) *MI0
+                endif
+            endif
+            IF (QI3D(K).GE.0.1E-8.and.QNI3D(K).GE.0.1E-8) THEN 
+               ! ice with snow
+               type1_send=CB_IS
+               mrthresh=ci*500.e-6_wp**di
+               mrupper=ci*5000.e-6_wp**di
+               mrupper=min(ci*(pthreshi/LAMI(k))**di,mrupper)
+               mithresh=cs*1.e-6_wp**ds
+               miupper=cs*(pthreshs/LAMS(k))**ds
+               if((mrupper.gt.mrthresh).and.(miupper.gt.mithresh)) then
+                       c_1=ci;       	c_2=cs
+                       d_1=di;       	d_2=ds
+                       a_1=ain(k);      a_2=asn(k)
+                       b_1=bi;          b_2=bs
+                       alph_1=0.;       alph_2=0.
+                       e12=eii
+                       lam_1=LAMI(k);   lam_2=LAMS(k)
+                       n_1=n0i(k);      n_2=n0s(k)
+                       
+                       call quad2d_qgaus(dintegral_collisional_breakup,&
+                       		limit1_collisional, limit2_collisional, &
+				        	mrthresh, mrupper, dummy_calc)
+                       NIICIS(K)=real(dummy_calc)* RHO(K)
+                       PIICIS(K)=real(dummy_calc)* RHO(K) *MI0
+                endif
+               ! snow with ice
+               type1_send=CB_SI
+               mrthresh=cs*500.e-6_wp**ds
+               mrupper=cs*5000.e-6_wp**ds
+               mrupper=min(cs*(pthreshs/LAMS(k))**ds,mrupper)
+               mithresh=ci*1.e-6_wp**di
+               miupper=ci*(pthreshi/LAMI(k))**di
+               if((mrupper.gt.mrthresh).and.(miupper.gt.mithresh)) then
+                       c_1=cs;       	c_2=ci
+                       d_1=ds;       	d_2=di
+                       a_1=asn(k);      a_2=ain(k)
+                       b_1=bs;          b_2=bi
+                       alph_1=0.;       alph_2=0.
+                       e12=eii
+                       lam_1=LAMS(k);   lam_2=LAMI(k)
+                       n_1=n0s(k);      n_2=n0i(k)
+                       
+                       call quad2d_qgaus(dintegral_collisional_breakup,&
+                       		limit1_collisional, limit2_collisional, &
+				        	mrthresh, mrupper, dummy_calc)
+                       NIICSI(K)=real(dummy_calc)* RHO(K)
+                       PIICSI(K)=real(dummy_calc)* RHO(K) *MI0
+                endif
+            endif
+        
+         endif
+         
+
+
+
+
 !........................................................................
 ! CONVERSION OF RIMED CLOUD WATER ONTO SNOW TO GRAUPEL/HAIL
 
@@ -3143,7 +3367,7 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
             if(MORR_SIP_MODE1.and.MNUCCR(K) > 0. .and. NNUCCR(K) > 0.) then
                 mrthresh=1.e-6_wp
                 mrupper=(pthreshr/LAMR(k))
-                t_send=T3D(K)
+                t_send=T3D(K)-ttr
                 lam_1=(NNUCCR(K)/MNUCCR(K)*crain*6.0)**(1.0/drain)   
                 n_1=NNUCCR(K)*lam_1
                 NMODE1(K)=NMODE1(K)+romb(integral_m1,mrthresh,mrupper)
@@ -3521,28 +3745,48 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
 
         IF (IGRAUP.EQ.0) THEN
 
-      DUM = (-PRDS(K)-PSACWS(K)-PRAI(K)-PRCI(K)-PRACS(K)-EPRDS(K)+PSACR(K)-PIACRS(K)-PRACIS(K))*DT
+      DUM = (-PRDS(K)-PSACWS(K)-PRAI(K)-PRCI(K)-PRACS(K)-&
+      	EPRDS(K)+PSACR(K)-PIACRS(K)-PRACIS(K) &
+      	+PIICSI(K)+PIICSS(K)+PIICSG(K))*DT
 
       IF (DUM.GT.QNI3D(K).AND.QNI3D(K).GE.QSMALL) THEN
 
-        RATIO = (QNI3D(K)/DT+PRDS(K)+PSACWS(K)+PRAI(K)+PRCI(K)+PRACS(K)+PIACRS(K)+PRACIS(K))/(-EPRDS(K)+PSACR(K))
+        RATIO = (QNI3D(K)/DT+PRDS(K)+PSACWS(K)+PRAI(K)+&
+        	PRCI(K)+PRACS(K)+PIACRS(K)+PRACIS(K))/(-EPRDS(K)+PSACR(K) &
+        	+PIICSI(K)+PIICSS(K)+PIICSG(K)) 
 
        EPRDS(K) = EPRDS(K)*RATIO
        PSACR(K) = PSACR(K)*RATIO
-
+       PIICSI(K) = PIICSI(K)*RATIO
+	   PIICSS(K) = PIICSS(K)*RATIO
+	   PIICSG(K) = PIICSG(K)*RATIO
+       NIICSI(K) = NIICSI(K)*RATIO
+       NIICSS(K) = NIICSS(K)*RATIO
+       NIICSG(K) = NIICSG(K)*RATIO
+       
        END IF
 
 ! FOR NO GRAUPEL, NEED TO INCLUDE FREEZING OF RAIN FOR SNOW
        ELSE IF (IGRAUP.EQ.1) THEN
 
-      DUM = (-PRDS(K)-PSACWS(K)-PRAI(K)-PRCI(K)-PRACS(K)-EPRDS(K)+PSACR(K)-PIACRS(K)-PRACIS(K)-MNUCCR(K))*DT
+      DUM = (-PRDS(K)-PSACWS(K)-PRAI(K)-PRCI(K)-PRACS(K)-&
+      	EPRDS(K)+PSACR(K)-PIACRS(K)-PRACIS(K)-MNUCCR(K) &
+      	+PIICSI(K)+PIICSS(K)+PIICSG(K))*DT
 
       IF (DUM.GT.QNI3D(K).AND.QNI3D(K).GE.QSMALL) THEN
 
-       RATIO = (QNI3D(K)/DT+PRDS(K)+PSACWS(K)+PRAI(K)+PRCI(K)+PRACS(K)+PIACRS(K)+PRACIS(K)+MNUCCR(K))/(-EPRDS(K)+PSACR(K))
+       RATIO = (QNI3D(K)/DT+PRDS(K)+PSACWS(K)+PRAI(K)+PRCI(K)+PRACS(K)+&
+       	PIACRS(K)+PRACIS(K)+MNUCCR(K))/(-EPRDS(K)+PSACR(K) &
+       	+PIICSI(K)+PIICSS(K)+PIICSG(K))
 
        EPRDS(K) = EPRDS(K)*RATIO
        PSACR(K) = PSACR(K)*RATIO
+       PIICSI(K) = PIICSI(K)*RATIO
+	   PIICSS(K) = PIICSS(K)*RATIO
+	   PIICSG(K) = PIICSG(K)*RATIO
+       NIICSI(K) = NIICSI(K)*RATIO
+       NIICSS(K) = NIICSS(K)*RATIO
+       NIICSG(K) = NIICSG(K)*RATIO
 
        END IF
 
@@ -3550,15 +3794,17 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
 
 ! CONSERVATION OF QG
 
-      DUM = (-PSACWG(K)-PRACG(K)-PGSACW(K)-PGRACS(K)-PRDG(K)-MNUCCR(K)-EPRDG(K)-PIACR(K)-PRACI(K)-PSACR(K))*DT
+      DUM = (-PSACWG(K)-PRACG(K)-PGSACW(K)-PGRACS(K)-PRDG(K)-&
+      	MNUCCR(K)-EPRDG(K)-PIACR(K)-PRACI(K)-PSACR(K)+PIICGG(K))*DT
 
       IF (DUM.GT.QG3D(K).AND.QG3D(K).GE.QSMALL) THEN
 
         RATIO = (QG3D(K)/DT+PSACWG(K)+PRACG(K)+PGSACW(K)+PGRACS(K)+PRDG(K)+MNUCCR(K)+PSACR(K)+&
-                  PIACR(K)+PRACI(K))/(-EPRDG(K))
+                  PIACR(K)+PRACI(K))/(-EPRDG(K)+PIICGG(K))
 
        EPRDG(K) = EPRDG(K)*RATIO
-
+	   PIICGG(K) = PIICGG(K)*RATIO
+	   NIICGG(K) = NIICGG(K)*RATIO
       END IF
 
 ! TENDENCIES
@@ -3580,7 +3826,8 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
       QI3DTEN(K) = QI3DTEN(K)+                                      &
          (PRD(K)+EPRD(K)+PSACWI(K)+MNUCCC(K)-PRCI(K)-                                 &
                   PRAI(K)+QMULTS(K)+QMULTG(K)+QMULTR(K)+QMULTRG(K)+MNUCCD(K)-PRACI(K)-PRACIS(K)+&
-                +PMODE1(K)+PMODE2(K))
+                +PMODE1(K)+PMODE2(K) &
+                +PIICGG(K)+PIICSI(K)+PIICSS(K)+PIICSG(K))
       QR3DTEN(K) = QR3DTEN(K)+                                      &
                  (PRE(K)+PRA(K)+PRC(K)-PRACS(K)-MNUCCR(K)-QMULTR(K)-QMULTRG(K) &
              -PIACR(K)-PIACRS(K)-PRACG(K)-PGRACS(K)-PMODE1(K)-PMODE2(K))
@@ -3588,17 +3835,21 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
       IF (IGRAUP.EQ.0) THEN
 
       QNI3DTEN(K) = QNI3DTEN(K)+                                    &
-           (PRAI(K)+PSACWS(K)+PRDS(K)+PRACS(K)+PRCI(K)+EPRDS(K)-PSACR(K)+PIACRS(K)+PRACIS(K))
+           (PRAI(K)+PSACWS(K)+PRDS(K)+PRACS(K)+PRCI(K)+EPRDS(K)-PSACR(K)+PIACRS(K)+PRACIS(K) &
+           -PIICSI(K)-PIICSS(K)-PIICSG(K))
       NS3DTEN(K) = NS3DTEN(K)+(NSAGG(K)+NPRCI(K)-NSCNG(K)-NGRACS(K)+NIACRS(K))
       QG3DTEN(K) = QG3DTEN(K)+(PRACG(K)+PSACWG(K)+PGSACW(K)+PGRACS(K)+ &
-                    PRDG(K)+EPRDG(K)+MNUCCR(K)+PIACR(K)+PRACI(K)+PSACR(K))
+                    PRDG(K)+EPRDG(K)+MNUCCR(K)+PIACR(K)+PRACI(K)+PSACR(K) &
+                    -PIICGG(K))
       NG3DTEN(K) = NG3DTEN(K)+(NSCNG(K)+NGRACS(K)+NNUCCR(K)+NIACR(K))
 
 ! FOR NO GRAUPEL, NEED TO INCLUDE FREEZING OF RAIN FOR SNOW
       ELSE IF (IGRAUP.EQ.1) THEN
 
       QNI3DTEN(K) = QNI3DTEN(K)+                                    &
-           (PRAI(K)+PSACWS(K)+PRDS(K)+PRACS(K)+PRCI(K)+EPRDS(K)-PSACR(K)+PIACRS(K)+PRACIS(K)+MNUCCR(K))
+           (PRAI(K)+PSACWS(K)+PRDS(K)+PRACS(K)+PRCI(K)+EPRDS(K)-PSACR(K) &
+           +PIACRS(K)+PRACIS(K)+MNUCCR(K) &
+           -PIICSI(K)-PIICSS(K)-PIICSG(K))
       NS3DTEN(K) = NS3DTEN(K)+(NSAGG(K)+NPRCI(K)-NSCNG(K)-NGRACS(K)+NIACRS(K)+NNUCCR(K))
 
       END IF
@@ -3608,7 +3859,9 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
 
       NI3DTEN(K) = NI3DTEN(K)+                                      &
        (NNUCCC(K)-NPRCI(K)-NPRAI(K)+NMULTS(K)+NMULTG(K)+NMULTR(K)+NMULTRG(K)+ &
-               NNUCCD(K)-NIACR(K)-NIACRS(K)+NMODE1(K)+NMODE2(K))
+               NNUCCD(K)-NIACR(K)-NIACRS(K)+NMODE1(K)+NMODE2(K)+ &
+               NIICGG(K)+NIICII(K)+NIICIS(K)+NIICIG(K)+                &
+               NIICSI(K)+NIICSS(K)+NIICSG(K))
 
       NR3DTEN(K) = NR3DTEN(K)+(NPRC1(K)-NPRACS(K)-NNUCCR(K)      &
                    +NRAGG(K)-NIACR(K)-NIACRS(K)-NPRACG(K)-NGRACS(K))
@@ -5098,8 +5351,24 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
         implicit none
         real(wp), intent(in) :: x
         real(wp) :: limit1_collisional
-        limit1_collisional=1.e-6_wp
+        limit1_collisional=mithresh
     end function limit1_collisional
+
+	function limit1_collisional_x(x)
+		implicit none
+		real(wp), intent(in) :: x
+		real(wp) :: limit1_collisional_x
+	
+		limit1_collisional_x = x
+	
+	end function limit1_collisional_x
+
+    function limit2_collisional(x)
+        implicit none
+        real(wp), intent(in) :: x
+        real(wp) :: limit2_collisional
+        limit2_collisional=miupper
+    end function limit2_collisional
     
 	!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 	! quad2d_qgaus for doing a double integral
@@ -5945,7 +6214,6 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
 		real(wp) :: m1, diam1, v1
 		real(wp), dimension(size(y)) :: m2, diam2, v2, delv, k0, nfrag
 		real(wp) :: alpha, a0, t0, apar, cpar, nmax, gamma
-		real(wp) :: symmetry_factor
 		real(wp), parameter :: frimes = 0.1_wp
 	
 		! Particle masses, diameters and fall speeds
@@ -5975,49 +6243,42 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
 		cpar = 0.0_wp
 		nmax = 0.0_wp
 		gamma = 1.0_wp
-		symmetry_factor = 1.0_wp
-	
+		
 		select case (type1_send)
-	
+		
 		case (CB_GG_SMALL)
-	
-			! Graupel-graupel collisions with particle 1 in the small
-			! fragmenting-graupel size range (approximately 0.5-5 mm).
+		
 			a0 = 3.78e4_wp*(1.0_wp + 0.0079_wp/diam1**1.5_wp)
 			t0 = -15.0_wp
-	
+		
 			apar = a0*oneoverthree +                            &
 				   max(2.0_wp*a0*oneoverthree -                &
 				   a0*oneovernine*abs(t_send-t0),0.0_wp)
-	
+		
 			cpar = 6.30e6_wp*phi_phillips
 			nmax = 100.0_wp
 			gamma = 0.30_wp
-	
-			! No factor of 1/2 because the two integration limits differ.
-			symmetry_factor = 1.0_wp
-	
+		
+		
 		case (CB_GG_HAIL)
-	
-			! Hail / large-graupel breakup.
+		
 			a0 = 4.35e5_wp
 			t0 = -15.0_wp
-	
+		
 			apar = a0*oneoverthree +                            &
 				   max(2.0_wp*a0*oneoverthree -                &
 				   a0*oneovernine*abs(t_send-t0),0.0_wp)
-	
+		
 			cpar = 3.31e5_wp
 			nmax = 1000.0_wp
 			gamma = 0.54_wp
-	
-			! Use 1/2 only where both quadratures use the same size limits.
-			symmetry_factor = 0.5_wp
-	
+		
+		
 		case (CB_II, CB_IS, CB_IG, CB_SI, CB_SS, CB_SG)
-	
-			! Ice/snow fragmentation parameters from Phillips et al. (2017).
-			! These collision types currently use the same breakup formulation.
+		
+			! For II and SS particle 1 is restricted to 0.5-5 mm while
+			! particle 2 spans the full distribution. Duplicate pairs in
+			! the overlapping 0.5-5 mm interval are removed below.
 			if (t_send >= -17.0_wp .and. t_send <= -12.0_wp) then
 	
 				! Dendritic regime
@@ -6047,11 +6308,6 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
 	
 			endif
 	
-			! For like-like collisions over identical integration limits,
-			! the double integral counts each physical pair twice.
-			if (type1_send == CB_II .or. type1_send == CB_SS) then
-				symmetry_factor = 0.5_wp
-			endif
 	
 		case default
 	
@@ -6068,9 +6324,18 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
 		! number of fragments produced by one collision.
 		nfrag = min(alpha*apar *                                  &
 			(1.0_wp-exp(-(cpar*k0/(alpha*apar))**gamma)), nmax)
+
+		! For like-like collisions particle 1 is restricted to the
+		! 0.5-5 mm range. Within this overlapping range both orderings
+		! of the same collision are present, so retain only one triangle.
+		if (type1_send == CB_II .or. type1_send == CB_SS) then
+			where (m2 >= mrthresh .and. m2 <= mrupper .and. m2 < m1)
+				dintegral_collisional_breakup = 0.0_wp
+			end where
+		endif
 	
 		! Apply the collision-counting symmetry correction where required.
-		dintegral_collisional_breakup = symmetry_factor *         &
+		dintegral_collisional_breakup =        &
 			dintegral_collisional_breakup*nfrag
 	
 	end function dintegral_collisional_breakup
