@@ -266,9 +266,11 @@ MODULE MODULE_MP_MORR_TWO_MOMENT
         c_1,c_2,d_1,d_2,lam_1,lam_2,n_1,n_2,alph_1,alph_2, a_1, b_1,a_2,b_2,rho_1,rho_2, &
         e12,f_mode2
      integer, private :: type1_send
+	 real(wp), private :: mifragthresh, mifragupper
+!$OMP THREADPRIVATE (mifragthresh,mifragupper)     
 !$OMP THREADPRIVATE (xsav,mrthresh,mrupper,miupper,c_1,c_2,d_1,d_2,lam_1,lam_2)
 !$OMP THREADPRIVATE (n_1,n_2,alph_1,alph_2,a_1,b_1,a_2,b_2,rho_1,rho_2,e12,t_send,f_mode2)
-!$OMP THREADPRIVATE (type1_send)
+!$OMP THREADPRIVATE (type1_send,mithresh)
 
 !
      interface assert_eq
@@ -3018,10 +3020,11 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
          IF (QR3D(K).GE.0.1E-8.and.MORR_SIP_MODE2) THEN
             f_mode2=min(-CPW*(T3D(K)-ttr)/XLF(K),1.0_wp)
             IF (QI3D(K).GE.0.1E-8) THEN 
-               mrthresh=crain*1.e-6_wp**drain
+               mrthresh=crain*150.e-6_wp**drain
                mrupper=crain*(pthreshr/LAMR(k))**drain
                mithresh=ci*1.e-6_wp**di
                miupper=ci*(pthreshi/LAMI(k))**di
+               mrupper=min(mrupper,miupper)
                if((mrupper.gt.mrthresh).and.(miupper.gt.mithresh)) then
                        c_1=crain;       c_2=CI
                        d_1=Drain;       d_2=di
@@ -3040,10 +3043,11 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
             endif
             
             IF (QNI3D(K).GE.0.1E-8) THEN 
-               mrthresh=crain*1.e-6_wp**drain
+               mrthresh=crain*150.e-6_wp**drain
                mrupper=crain*(pthreshr/LAMR(k))**drain
                mithresh=cs*1.e-6_wp**ds
                miupper=cs*(pthreshs/LAMS(k))**ds
+               mrupper=min(mrupper,miupper)
                if((mrupper.gt.mrthresh).and.(miupper.gt.mithresh)) then
                        c_1=crain;       c_2=CS
                        d_1=Drain;       d_2=ds
@@ -3062,10 +3066,11 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
             endif
             
             IF (QG3D(K).GE.0.1E-8) THEN 
-               mrthresh=crain*1.e-6_wp**drain
+               mrthresh=crain*150.e-6_wp**drain
                mrupper=crain*(pthreshr/LAMR(k))**drain
                mithresh=cg*1.e-6_wp**dg
                miupper=cg*(pthreshg/LAMG(k))**dg
+               mrupper=min(mrupper,miupper)
                if((mrupper.gt.mrthresh).and.(miupper.gt.mithresh)) then
                        c_1=crain;       c_2=CG
                        d_1=Drain;       d_2=dg
@@ -3245,6 +3250,8 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
                mrupper=min(ci*(pthreshi/LAMI(k))**di,mrupper)
                mithresh=cs*1.e-6_wp**ds
                miupper=cs*(pthreshs/LAMS(k))**ds
+			   mifragthresh = cs*500.e-6_wp**ds
+			   mifragupper  = min(cs*5000.e-6_wp**ds, miupper)
                if((mrupper.gt.mrthresh).and.(miupper.gt.mithresh)) then
                        c_1=ci;       	c_2=cs
                        d_1=di;       	d_2=ds
@@ -3268,6 +3275,8 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
                mrupper=min(cs*(pthreshs/LAMS(k))**ds,mrupper)
                mithresh=ci*1.e-6_wp**di
                miupper=ci*(pthreshi/LAMI(k))**di
+			   mifragthresh = ci*500.e-6_wp**di
+			   mifragupper  = min(ci*5000.e-6_wp**di, miupper)
                if((mrupper.gt.mrthresh).and.(miupper.gt.mithresh)) then
                        c_1=cs;       	c_2=ci
                        d_1=ds;       	d_2=di
@@ -5984,7 +5993,7 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
         real(wp) :: tc, dthresh, x, beta1,log10zeta, log10nabla, t0, zetab, nablab, tb0, &
             sigma, omega, m,d, fac1
         
-        if((min2>min1).or.(min1<=6.55e-11_wp)) then
+        if((min2>=min1).or.(min1<=6.55e-11_wp)) then
             ! the ice is more massive than the drop or drop small, don't do it
             n=0._wp
             nt=0._wp
@@ -5998,7 +6007,11 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
         x = log10(dthresh*1000._wp)
         
         ! table 3, phillips et al.
-        beta1 = 0.
+		if (dthresh < 0.4e-3_wp) then
+			beta1 = 0.0_wp
+		else
+			beta1 = -0.1839_wp*x*x - 0.2017_wp*x - 0.0512_wp
+		endif
         log10zeta = 2.4268_wp*x*x*x + 3.3274_wp*x*x + 2.0783_wp*x + 1.2927_wp
         log10nabla = 0.1242_wp*x*x*x - 0.2316_wp*x*x - 0.9874_wp*x - 0.0827_wp
         t0 = -1.3999_wp*x*x*x - 5.3285_wp*x*x - 3.9847_wp*x - 15.0332_wp
@@ -6011,8 +6024,8 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
         sigma = min(max((d-50.e-6_wp)/10.e-6_wp,0._wp), 1._wp)
         omega = min(max((-3._wp-tc)/3._wp,0._wp),1._wp)
         
-        n = sigma*omega*(10._wp**log10zeta *(10**log10nabla)**2) / &
-            ((tc-t0)**2+(10._wp*log10nabla)**2+beta1*tc)
+        n = sigma*omega*(10._wp**log10zeta *(10**log10nabla)**2 / &
+            ((tc-t0)**2+(10._wp**log10nabla)**2)+beta1*tc)
         
         ! total number of fragments
         n=n*d/dthresh
@@ -6029,7 +6042,8 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
         ! mass of small fragments
         mt=oneoversix*rhoi*pi*dtt**3
         
-        fac1=min((mt*nt+mb*nb)/min1,1._wp)
+        !fac1=min((mt*nt+mb*nb)/min1,1._wp)
+        fac1 = min(min1/(mt*nt + mb*nb), 1.0_wp)
         nt = nt *fac1
         nb = nb *fac1
         n=nt+nb
@@ -6213,7 +6227,8 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
 		real(wp), dimension(size(y)) :: dintegral_collisional_breakup
 		real(wp) :: m1, diam1, v1
 		real(wp), dimension(size(y)) :: m2, diam2, v2, delv, k0, nfrag
-		real(wp) :: alpha, a0, t0, apar, cpar, nmax, gamma
+		real(wp), dimension(size(y)) :: dsmall, alpha, apar
+		real(wp) :: a0, t0, cpar, nmax, gamma
 		real(wp), parameter :: frimes = 0.1_wp
 	
 		! Particle masses, diameters and fall speeds
@@ -6222,7 +6237,8 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
 	
 		diam1 = (m1/c_1)**(1.0_wp/d_1)
 		diam2 = (m2/c_2)**(1.0_wp/d_2)
-	
+		dsmall = min(diam1,diam2)
+		
 		v1 = a_1*diam1**b_1
 		v2 = a_2*diam2**b_2
 		delv = abs(v1-v2)
@@ -6238,7 +6254,7 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
 	
 		! Phillips et al. (2017) breakup parameters.
 		! Particle 1 is taken to be the fragmenting particle.
-		alpha = pi*diam1**2
+		alpha = pi*dsmall**2
 		apar = 0.0_wp
 		cpar = 0.0_wp
 		nmax = 0.0_wp
@@ -6283,7 +6299,7 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
 	
 				! Dendritic regime
 				apar = 1.41e6_wp*(1.0_wp + 100.0_wp*frimes**2) * &
-					   (1.0_wp + 3.98e-5_wp/diam1**1.5_wp)
+					   (1.0_wp + 3.98e-5_wp/dsmall**1.5_wp)
 	
 				cpar = 3.09e6_wp*frimes
 				nmax = 100.0_wp
@@ -6294,7 +6310,7 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
 	
 				! Spatial-planar regime
 				apar = 1.58e7_wp*(1.0_wp + 100.0_wp*frimes**2) * &
-					   (1.0_wp + 1.33e-4_wp/diam1**1.5_wp)
+					   (1.0_wp + 1.33e-4_wp/dsmall**1.5_wp)
 	
 				cpar = 7.08e6_wp*frimes
 				nmax = 100.0_wp
@@ -6322,9 +6338,12 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
 	
 		! Phillips et al. (2017), equation 13:
 		! number of fragments produced by one collision.
-		nfrag = min(alpha*apar *                                  &
-			(1.0_wp-exp(-(cpar*k0/(alpha*apar))**gamma)), nmax)
-
+		where (alpha*apar > 0.0_wp)
+			nfrag = min(alpha*apar * &
+				(1.0_wp-exp(-(cpar*k0/(alpha*apar))**gamma)), nmax)
+		elsewhere
+			nfrag = 0.0_wp
+		end where
 		! For like-like collisions particle 1 is restricted to the
 		! 0.5-5 mm range. Within this overlapping range both orderings
 		! of the same collision are present, so retain only one triangle.
@@ -6334,6 +6353,25 @@ END SUBROUTINE MP_MORR_TWO_MOMENT
 			end where
 		endif
 	
+		if (type1_send == CB_IS) then
+		   ! Particle 1 = ice.
+		   ! If snow is also in its breakup range, retain CB_IS only
+		   ! when ice is the smaller particle.
+		   where (m2 >= mifragthresh .and. &
+				  m2 <= mifragupper  .and. &
+				  diam2 < diam1)
+			  dintegral_collisional_breakup = 0.0_wp
+		   end where
+		elseif (type1_send == CB_SI) then
+		   ! Particle 1 = snow.
+		   ! If ice is also in its breakup range, retain CB_SI only
+		   ! when snow is the smaller particle.
+		   where (m2 >= mifragthresh .and. &
+				  m2 <= mifragupper  .and. &
+				  diam2 <= diam1)
+			  dintegral_collisional_breakup = 0.0_wp
+		   end where		
+		endif
 		! Apply the collision-counting symmetry correction where required.
 		dintegral_collisional_breakup =        &
 			dintegral_collisional_breakup*nfrag

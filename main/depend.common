@@ -2625,6 +2625,7 @@ module_cumulus_driver.o: \
 
 
 module_pbl_driver.o: \
+        module_bl_shinhong.o \
 	module_bl_gbmpbl.o \
 	module_bl_keps.o \
 	module_bl_shinhong.o \
